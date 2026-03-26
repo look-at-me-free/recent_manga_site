@@ -65,7 +65,9 @@
       const key = String(volumeSlug).toLowerCase();
       const val = runtime.volumeToFirstChapter[key];
       if (!val) return null;
-      return typeof val === "string" ? runtime.entryLookup[String(val).toLowerCase()] || null : val;
+      return typeof val === "string"
+        ? runtime.entryLookup[String(val).toLowerCase()] || null
+        : val;
     },
 
     getEntryMeta(work, entry) {
@@ -121,8 +123,11 @@
 
       for (const volumeSlug of volumeSlugs) {
         const volumeMeta = chapterLocations[volumeSlug] || {};
-        const volumeDisplay = volumeMeta.display_label || this.titleCaseSlug(volumeSlug);
-        const chapterNumbers = Array.isArray(volumeMeta.chapter_numbers) ? volumeMeta.chapter_numbers : [];
+        const volumeNumber = Number(this.extractNumber(volumeSlug)) || null;
+        const volumeDisplay = volumeMeta.display_label || this.makeVolumeDisplay(volumeSlug, volumeMeta);
+        const chapterNumbers = Array.isArray(volumeMeta.chapter_numbers)
+          ? volumeMeta.chapter_numbers.map(n => Number(n)).filter(n => Number.isFinite(n))
+          : [];
         const volumeSearchTerms = Array.isArray(volumeMeta.search_terms) ? volumeMeta.search_terms : [];
         const chaptersObj = volumeMeta.chapters && typeof volumeMeta.chapters === "object" ? volumeMeta.chapters : {};
         const chapterSlugs = Object.keys(chaptersObj).sort((a, b) => this.sortChapterSlug(a, b));
@@ -158,13 +163,15 @@
           entrySlug: volumeEntry.slug,
           entryLabel: volumeDisplay,
           subLabel: "Mapped volume",
-          searchKey: this.compactJoin([
+          searchKey: this.makeVolumeSearchKey({
             workLabel,
+            workSlug: work.slug,
             volumeSlug,
+            volumeNumber,
             volumeDisplay,
-            ...volumeSearchTerms,
-            ...chapterNumbers.map(n => `chapter ${n}`)
-          ])
+            chapterNumbers,
+            extraTerms: volumeSearchTerms
+          })
         });
 
         let firstChapterEntry = null;
@@ -180,12 +187,12 @@
             chapterMeta.subtitle ||
             (chapterNumber ? `Chapter ${chapterNumber}` : this.titleCaseSlug(chapterSlug));
 
-          const chapterEntrySlug =
+          const syntheticSlug =
             chapterMeta.synthetic_slug ||
             `${volumeSlug}__${chapterSlug}`;
 
           const chapterEntry = {
-            slug: chapterEntrySlug,
+            slug: syntheticSlug,
             type: "mapped_chapter",
             subtitle: chapterDisplay,
             display_label: chapterDisplay,
@@ -240,17 +247,19 @@
             entrySlug: chapterEntry.slug,
             entryLabel: chapterDisplay,
             subLabel: volumeDisplay,
-            searchKey: this.compactJoin([
+            searchKey: this.makeChapterSearchKey({
               workLabel,
-              chapterEntry.slug,
-              chapterSlug,
-              chapterDisplay,
+              workSlug: work.slug,
               volumeSlug,
+              volumeNumber,
               volumeDisplay,
-              chapterNumber ? `chapter ${chapterNumber}` : "",
-              ...chapterSearchTerms,
-              ...chapterPages.map(p => p?.local_name || p?.title || p?.name || "")
-            ])
+              chapterSlug,
+              chapterNumber,
+              chapterDisplay,
+              chapterEntrySlug: chapterEntry.slug,
+              extraTerms: chapterSearchTerms,
+              pageTerms: chapterPages.map(p => p?.local_name || p?.title || p?.name || "")
+            })
           });
         }
 
@@ -274,9 +283,9 @@
 
     makeManifest({ work, map, volumeSlug, volumeMeta, chapterSlug, chapterMeta, chapterEntry, imageUrls }) {
       const inheritedSubids =
-        this.cloneObject(map?.subids) ||
-        this.cloneObject(volumeMeta?.subids) ||
         this.cloneObject(chapterMeta?.subids) ||
+        this.cloneObject(volumeMeta?.subids) ||
+        this.cloneObject(map?.subids) ||
         null;
 
       const inheritedAds =
@@ -288,9 +297,7 @@
       const imageCount = imageUrls.length;
 
       return {
-        id:
-          chapterMeta.id ||
-          `${work.slug}-${volumeSlug}-${chapterSlug}`,
+        id: chapterMeta.id || `${work.slug}-${volumeSlug}-${chapterSlug}`,
         parent_work_id: work.id ?? null,
         parent_work_slug: work.slug,
         slug: chapterSlug,
@@ -351,6 +358,116 @@
       }
 
       return "";
+    },
+
+    makeVolumeDisplay(volumeSlug, volumeMeta) {
+      const volumeNumber = Number(this.extractNumber(volumeSlug)) || null;
+      const nums = Array.isArray(volumeMeta?.chapter_numbers)
+        ? volumeMeta.chapter_numbers.map(n => Number(n)).filter(n => Number.isFinite(n))
+        : [];
+
+      if (volumeNumber && nums.length) {
+        const min = Math.min(...nums);
+        const max = Math.max(...nums);
+        if (min === max) return `Volume ${volumeNumber} - Chapter ${min}`;
+        return `Volume ${volumeNumber} - Chapters ${min}-${max}`;
+      }
+
+      if (volumeNumber) return `Volume ${volumeNumber}`;
+      return this.titleCaseSlug(volumeSlug);
+    },
+
+    makeVolumeSearchKey({ workLabel, workSlug, volumeSlug, volumeNumber, volumeDisplay, chapterNumbers, extraTerms }) {
+      const terms = [];
+      const add = (...vals) => {
+        for (const v of vals.flat()) {
+          const s = String(v ?? "").trim().toLowerCase();
+          if (s) terms.push(s);
+        }
+      };
+
+      add(workLabel, workSlug, volumeSlug, volumeDisplay);
+
+      if (volumeNumber) {
+        add(
+          `volume ${volumeNumber}`,
+          `${workLabel} volume ${volumeNumber}`,
+          `${workSlug} volume ${volumeNumber}`,
+          `${workLabel} vol ${volumeNumber}`,
+          `${workSlug} vol ${volumeNumber}`
+        );
+      }
+
+      if (chapterNumbers.length) {
+        add(
+          `${workLabel} chapters ${chapterNumbers.join(" ")}`,
+          `${volumeDisplay} chapters ${chapterNumbers.join(" ")}`
+        );
+        for (const n of chapterNumbers) {
+          add(
+            `chapter ${n}`,
+            `${workLabel} chapter ${n}`,
+            `${workSlug} chapter ${n}`,
+            volumeNumber ? `volume ${volumeNumber} chapter ${n}` : "",
+            volumeNumber ? `${workLabel} volume ${volumeNumber} chapter ${n}` : "",
+            volumeNumber ? `${workLabel} vol ${volumeNumber} chapter ${n}` : ""
+          );
+        }
+      }
+
+      add(extraTerms || []);
+
+      return this.compactJoin(terms);
+    },
+
+    makeChapterSearchKey({ workLabel, workSlug, volumeSlug, volumeNumber, volumeDisplay, chapterSlug, chapterNumber, chapterDisplay, chapterEntrySlug, extraTerms, pageTerms }) {
+      const terms = [];
+      const add = (...vals) => {
+        for (const v of vals.flat()) {
+          const s = String(v ?? "").trim().toLowerCase();
+          if (s) terms.push(s);
+        }
+      };
+
+      add(workLabel, workSlug, volumeSlug, volumeDisplay, chapterSlug, chapterDisplay, chapterEntrySlug);
+
+      if (chapterNumber) {
+        add(
+          `chapter ${chapterNumber}`,
+          `${workLabel} chapter ${chapterNumber}`,
+          `${workSlug} chapter ${chapterNumber}`,
+          `${chapterDisplay} chapter ${chapterNumber}`,
+          `chapter_${chapterNumber}`,
+          `chapter-${chapterNumber}`,
+          `${workLabel} ${chapterNumber}`,
+          `${workSlug} ${chapterNumber}`
+        );
+      }
+
+      if (volumeNumber) {
+        add(
+          `volume ${volumeNumber}`,
+          `${workLabel} volume ${volumeNumber}`,
+          `${workSlug} volume ${volumeNumber}`,
+          `${workLabel} vol ${volumeNumber}`,
+          `${workSlug} vol ${volumeNumber}`
+        );
+
+        if (chapterNumber) {
+          add(
+            `volume ${volumeNumber} chapter ${chapterNumber}`,
+            `${workLabel} volume ${volumeNumber} chapter ${chapterNumber}`,
+            `${workSlug} volume ${volumeNumber} chapter ${chapterNumber}`,
+            `${workLabel} vol ${volumeNumber} chapter ${chapterNumber}`,
+            `${workSlug} vol ${volumeNumber} chapter ${chapterNumber}`
+          );
+        }
+      }
+
+      add(extraTerms || []);
+      add(pageTerms || []);
+
+      return this.compactJoin(terms);
     },
 
     shouldUseMap(work) {
