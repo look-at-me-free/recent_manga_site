@@ -276,6 +276,256 @@
     await Promise.all(STATE.works.filter(shouldUseMap).map(loadWorkMap));
   }
 
+  function getPageMaker() {
+    return window.PageMaker || window.pageMaker || window.PAGE_MAKER || null;
+  }
+
+  function getPageMakerRuntime(work) {
+    const pm = getPageMaker();
+    if (!pm || !work) return null;
+
+    try {
+      if (typeof pm.getWorkRuntime === "function") {
+        return pm.getWorkRuntime(work) || null;
+      }
+      if (typeof pm.getRuntimeForWork === "function") {
+        return pm.getRuntimeForWork(work) || null;
+      }
+      if (pm.runtime && typeof pm.runtime === "object") {
+        return pm.runtime[work.slug] || pm.runtime[normalizeKey(work.slug)] || null;
+      }
+      if (pm.works && typeof pm.works === "object") {
+        return pm.works[work.slug] || pm.works[normalizeKey(work.slug)] || null;
+      }
+    } catch (err) {
+      logError(err, "PageMaker runtime");
+    }
+
+    return null;
+  }
+
+  async function initPageMakerRuntime() {
+    const pm = getPageMaker();
+    if (!pm) return;
+
+    const payload = {
+      works: STATE.works,
+      maps: STATE.maps,
+      sourceMap: STATE.sourceMap,
+      config: CONFIG,
+      state: STATE,
+      helpers: {
+        normalizeKey,
+        normalizeBaseUrl,
+        titleCaseSlug,
+        getMap,
+        shouldUseMap,
+        getSourceBaseByKey,
+        getPrimaryWorkBlockUrl,
+        getFallbackWorkBlockUrl,
+        getMapFile
+      }
+    };
+
+    try {
+      if (typeof pm.initialize === "function") {
+        await pm.initialize(payload);
+        return;
+      }
+      if (typeof pm.init === "function") {
+        await pm.init(payload);
+        return;
+      }
+      if (typeof pm.buildRuntime === "function") {
+        await pm.buildRuntime(payload);
+        return;
+      }
+      if (typeof pm.prepare === "function") {
+        await pm.prepare(payload);
+      }
+    } catch (err) {
+      logError(err, "PageMaker initialize");
+    }
+  }
+
+  function pageMakerHasUsableRuntime(work) {
+    if (!work) return false;
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime) return false;
+
+    if (Array.isArray(runtime.visibleEntries) && runtime.visibleEntries.length) return true;
+    if (Array.isArray(runtime.chapterEntries) && runtime.chapterEntries.length) return true;
+    if (runtime.entryLookup && typeof runtime.entryLookup === "object" && Object.keys(runtime.entryLookup).length) return true;
+    return false;
+  }
+
+  function pageMakerGetVisibleEntries(work) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime) return [];
+
+    if (Array.isArray(runtime.visibleEntries)) return runtime.visibleEntries;
+    if (typeof runtime.getVisibleEntries === "function") {
+      try {
+        return runtime.getVisibleEntries(work) || [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function pageMakerGetChapterEntries(work) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime) return [];
+
+    if (Array.isArray(runtime.chapterEntries)) return runtime.chapterEntries;
+    if (typeof runtime.getChapterEntries === "function") {
+      try {
+        return runtime.getChapterEntries(work) || [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function pageMakerGetEntryBySlug(work, slug) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime || !slug) return null;
+
+    const target = normalizeKey(slug);
+
+    if (runtime.entryLookup && typeof runtime.entryLookup === "object") {
+      for (const key of Object.keys(runtime.entryLookup)) {
+        if (normalizeKey(key) === target) return runtime.entryLookup[key];
+      }
+    }
+
+    const all = [
+      ...(Array.isArray(runtime.visibleEntries) ? runtime.visibleEntries : []),
+      ...(Array.isArray(runtime.chapterEntries) ? runtime.chapterEntries : [])
+    ];
+
+    const hit = all.find(entry => normalizeKey(entry?.slug) === target);
+    if (hit) return hit;
+
+    if (typeof runtime.getEntryBySlug === "function") {
+      try {
+        return runtime.getEntryBySlug(work, slug) || null;
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  function pageMakerResolveVolumeToChapter(work, volumeSlug) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime || !volumeSlug) return null;
+
+    if (runtime.volumeToFirstChapter && typeof runtime.volumeToFirstChapter === "object") {
+      for (const key of Object.keys(runtime.volumeToFirstChapter)) {
+        if (normalizeKey(key) === normalizeKey(volumeSlug)) {
+          const val = runtime.volumeToFirstChapter[key];
+          if (typeof val === "string") {
+            return pageMakerGetEntryBySlug(work, val);
+          }
+          if (val && typeof val === "object") {
+            return val;
+          }
+        }
+      }
+    }
+
+    if (typeof runtime.getFirstChapterForVolume === "function") {
+      try {
+        return runtime.getFirstChapterForVolume(work, volumeSlug) || null;
+      } catch {
+        return null;
+      }
+    }
+
+    const chapters = pageMakerGetChapterEntries(work);
+    return chapters.find(entry => normalizeKey(entry?.volume_slug) === normalizeKey(volumeSlug)) || null;
+  }
+
+  function pageMakerGetEntryMeta(work, entry) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime || !entry) return null;
+
+    if (typeof runtime.getEntryMeta === "function") {
+      try {
+        return runtime.getEntryMeta(work, entry) || null;
+      } catch {
+        return null;
+      }
+    }
+
+    if (runtime.metaLookup && typeof runtime.metaLookup === "object") {
+      for (const key of Object.keys(runtime.metaLookup)) {
+        if (normalizeKey(key) === normalizeKey(entry.slug)) {
+          return runtime.metaLookup[key];
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function pageMakerGetDisplayLabel(work, entry) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime || !entry) return "";
+
+    if (typeof runtime.getDisplayLabel === "function") {
+      try {
+        return runtime.getDisplayLabel(work, entry) || "";
+      } catch {
+        return "";
+      }
+    }
+
+    return String(entry?.display_label || entry?.map_display_label || entry?.subtitle || "");
+  }
+
+  function pageMakerGetSearchRows(work) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime) return [];
+
+    if (Array.isArray(runtime.searchRows)) return runtime.searchRows;
+    if (typeof runtime.getSearchRows === "function") {
+      try {
+        return runtime.getSearchRows(work) || [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function pageMakerGetManifest(work, entry) {
+    const runtime = getPageMakerRuntime(work);
+    if (!runtime || !entry) return null;
+
+    if (typeof runtime.getManifest === "function") {
+      try {
+        return runtime.getManifest(work, entry) || null;
+      } catch {
+        return null;
+      }
+    }
+
+    if (runtime.manifests && typeof runtime.manifests === "object") {
+      for (const key of Object.keys(runtime.manifests)) {
+        if (normalizeKey(key) === normalizeKey(entry.slug)) {
+          return runtime.manifests[key];
+        }
+      }
+    }
+
+    return null;
+  }
+
   function sortVolumeSlug(a, b) {
     const ma = String(a).match(/^volume_(\d+)$/i);
     const mb = String(b).match(/^volume_(\d+)$/i);
@@ -351,6 +601,12 @@
   }
 
   function getVisibleEntries(work) {
+    if (!work) return [];
+    if (pageMakerHasUsableRuntime(work)) {
+      const pmEntries = pageMakerGetVisibleEntries(work);
+      if (pmEntries.length) return pmEntries;
+    }
+
     if (!shouldUseMap(work)) {
       return Array.isArray(work.entries) ? work.entries : [];
     }
@@ -360,6 +616,12 @@
   }
 
   function getChapterSequenceEntries(work) {
+    if (!work) return [];
+    if (pageMakerHasUsableRuntime(work)) {
+      const pmEntries = pageMakerGetChapterEntries(work);
+      if (pmEntries.length) return pmEntries;
+    }
+
     if (!shouldUseMap(work)) {
       return Array.isArray(work.entries) ? work.entries : [];
     }
@@ -385,16 +647,24 @@
   }
 
   function getChapterMeta(work, entry) {
+    const pmMeta = pageMakerGetEntryMeta(work, entry);
+    if (pmMeta) return pmMeta;
     return getMappedChapterMeta(work, entry);
   }
 
   function getEntryDisplayLabel(work, entry) {
+    const pmLabel = pageMakerGetDisplayLabel(work, entry);
+    if (pmLabel) return pmLabel;
+
     if (entry?.map_display_label) return entry.map_display_label;
     const meta = getChapterMeta(work, entry);
     return meta?.display_label || entry?.subtitle || titleCaseSlug(entry?.slug || "");
   }
 
   function getFirstChapterEntryForVolume(work, volumeSlug) {
+    const pmEntry = pageMakerResolveVolumeToChapter(work, volumeSlug);
+    if (pmEntry) return pmEntry;
+
     return getChapterSequenceEntries(work).find(
       entry => normalizeKey(entry.volume_slug) === normalizeKey(volumeSlug)
     ) || null;
@@ -402,6 +672,9 @@
 
   function getEntryBySlug(work, slug) {
     if (!work || !slug) return null;
+
+    const pmEntry = pageMakerGetEntryBySlug(work, slug);
+    if (pmEntry) return pmEntry;
 
     if (shouldUseMap(work)) {
       const chapterHit = getChapterSequenceEntries(work).find(
@@ -425,9 +698,11 @@
   function isVisibleEntryCurrent(work, visibleEntry) {
     if (!work || !visibleEntry || !STATE.currentEntry) return false;
 
+    const visibleVolume = visibleEntry.volume_slug || visibleEntry.slug;
+    const currentVolume = STATE.currentEntry.volume_slug || STATE.currentEntry.slug;
+
     if (visibleEntry.type === "mapped_volume") {
-      return normalizeKey(visibleEntry.volume_slug || visibleEntry.slug) ===
-             normalizeKey(STATE.currentEntry.volume_slug || STATE.currentEntry.slug);
+      return normalizeKey(visibleVolume) === normalizeKey(currentVolume);
     }
 
     return normalizeKey(visibleEntry.slug) === normalizeKey(STATE.currentEntry.slug);
@@ -455,7 +730,69 @@
         const workLabel = work.display || titleCaseSlug(work.slug);
         const map = getMap(work);
 
-        if (shouldUseMap(work)) {
+        if (pageMakerHasUsableRuntime(work)) {
+          const pmRows = pageMakerGetSearchRows(work);
+
+          if (pmRows.length) {
+            for (const row of pmRows) {
+              rows.push(makeSearchRow({
+                type: row.type || "entry",
+                workSlug: row.workSlug || work.slug,
+                workLabel: row.workLabel || workLabel,
+                entrySlug: row.entrySlug || row.slug || "",
+                entryLabel: row.entryLabel || row.label || "",
+                subLabel: row.subLabel || "",
+                page: row.page ?? null,
+                zoneId: row.zoneId ?? null,
+                searchKey: row.searchKey || row.search || ""
+              }));
+            }
+          } else {
+            const volumeEntries = getVisibleEntries(work);
+            const chapterEntries = getChapterSequenceEntries(work);
+
+            for (const entry of volumeEntries) {
+              const volumeMeta = getChapterMeta(work, entry);
+
+              rows.push(makeSearchRow({
+                type: "entry",
+                workSlug: work.slug,
+                workLabel,
+                entrySlug: entry.slug,
+                entryLabel: getEntryDisplayLabel(work, entry),
+                subLabel: "Mapped volume",
+                searchKey: [
+                  workLabel,
+                  entry.slug,
+                  entry.subtitle || "",
+                  entry.map_display_label || "",
+                  ...(volumeMeta?.search_terms || []),
+                  ...(volumeMeta?.chapter_numbers || []).map(n => `chapter ${n}`)
+                ].join(" ")
+              }));
+            }
+
+            for (const entry of chapterEntries) {
+              rows.push(makeSearchRow({
+                type: "chapter",
+                workSlug: work.slug,
+                workLabel,
+                entrySlug: entry.slug,
+                entryLabel: getEntryDisplayLabel(work, entry),
+                subLabel: entry.map_parent_label || "Mapped chapter",
+                searchKey: [
+                  workLabel,
+                  entry.slug,
+                  entry.subtitle || "",
+                  entry.map_display_label || "",
+                  entry.map_parent_label || "",
+                  String(entry.chapter_number || ""),
+                  ...(entry.map_pages || []).map(p => p.local_name || p.title || "")
+                ].join(" ")
+              }));
+            }
+          }
+        } else if (shouldUseMap(work)) {
           const volumeEntries = getVisibleEntries(work);
           const chapterEntries = getChapterSequenceEntries(work);
 
@@ -750,12 +1087,16 @@
   }
 
   function getEntryIndex(work, entry) {
-    const entries = shouldUseMap(work) ? getChapterSequenceEntries(work) : (work?.entries || []);
+    const entries = shouldUseMap(work) || pageMakerHasUsableRuntime(work)
+      ? getChapterSequenceEntries(work)
+      : (work?.entries || []);
     return entries.findIndex(e => normalizeKey(e.slug) === normalizeKey(entry?.slug));
   }
 
   function getEntryByOffset(work, entry, offset) {
-    const entries = shouldUseMap(work) ? getChapterSequenceEntries(work) : (work?.entries || []);
+    const entries = shouldUseMap(work) || pageMakerHasUsableRuntime(work)
+      ? getChapterSequenceEntries(work)
+      : (work?.entries || []);
     const currentIndex = getEntryIndex(work, entry);
     if (currentIndex < 0) return null;
     return entries[currentIndex + offset] || null;
@@ -1194,6 +1535,16 @@
     if (!next) return;
 
     try {
+      const pmManifest = pageMakerGetManifest(STATE.currentWork, next);
+      if (pmManifest) {
+        const images = buildImageList(pmManifest);
+        const firstUrl = images[0] || "";
+        if (firstUrl) {
+          STATE.nextPrefetch = fetch(firstUrl, { cache: "force-cache" }).catch(() => null);
+        }
+        return;
+      }
+
       if (next.type === "mapped_chapter" && Array.isArray(next.map_pages) && next.map_pages.length) {
         const firstUrl = next.map_pages[0]?.url || next.map_pages[0]?.r2_url || "";
         if (firstUrl) {
@@ -1229,7 +1580,10 @@
     let manifestRaw;
     let itemUrl = "";
 
-    if (selection.entry.type === "mapped_chapter" && Array.isArray(selection.entry.map_pages)) {
+    const pageMakerManifest = pageMakerGetManifest(selection.work, selection.entry);
+    if (pageMakerManifest) {
+      manifestRaw = pageMakerManifest;
+    } else if (selection.entry.type === "mapped_chapter" && Array.isArray(selection.entry.map_pages)) {
       manifestRaw = getMappedManifest(selection);
     } else if (selection.entry.type === "mapped_volume") {
       const firstChapter = getFirstChapterEntryForVolume(selection.work, selection.entry.volume_slug || selection.entry.slug);
@@ -1242,7 +1596,9 @@
 
       STATE.currentEntry = firstChapter;
       setQueryState(selection.work.slug, firstChapter.slug, true);
-      manifestRaw = getMappedManifest({ work: selection.work, entry: firstChapter });
+
+      const firstPmManifest = pageMakerGetManifest(selection.work, firstChapter);
+      manifestRaw = firstPmManifest || getMappedManifest({ work: selection.work, entry: firstChapter });
     } else {
       itemUrl = getItemJsonUrl(selection.work, selection.entry);
 
@@ -1440,11 +1796,38 @@
     });
   }
 
+  function exposeBridge() {
+    window.IndexReaderBridge = {
+      config: CONFIG,
+      state: STATE,
+      getMap,
+      getVisibleEntries,
+      getChapterSequenceEntries,
+      getEntryBySlug,
+      getEntryDisplayLabel,
+      getFirstChapterEntryForVolume,
+      buildSearchIndex,
+      renderWorksNav,
+      syncSearchSeed,
+      buildReader,
+      switchEntry,
+      refresh: async () => {
+        await initPageMakerRuntime();
+        buildSearchIndex();
+        renderWorksNav();
+        syncSearchSeed();
+        await buildReader();
+      }
+    };
+  }
+
   async function boot() {
     try {
       await loadLibrary();
       await hydrateWorksFromBlocksIfNeeded();
       await loadAllMaps();
+      await initPageMakerRuntime();
+      exposeBridge();
       buildSearchIndex();
 
       wireNavClicks();
