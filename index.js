@@ -1,122 +1,69 @@
 (() => {
   "use strict";
 
-  const LIBRARY_FILE = "library.json";
-  const DEFAULT_WORKS_BASE = "https://pub-cd01009a7c6c464aa0b093e33aa5ae51.r2.dev/works";
-  const ITEM_JSON_NAME = "item.json";
-  const BOTTOM_AD_COUNT = 6;
-
-  const RAIL_REFRESH_MS = 45000;
-  const BANNER_REFRESH_MS = 60000;
-  const BETWEEN_REFRESH_MS = 50000;
-  const MOBILE_STICKY_REFRESH_MS = 60000;
-
-  const READ_PROGRESS_PREFETCH = 0.7;
-  const BOTTOM_GLOW_PROGRESS = 0.95;
-  const SEARCH_RESULTS_LIMIT = 12;
-  const IS_MOBILE_READER = document.body?.dataset?.readerMode === "mobile";
-
-  const MIN_GLOBAL_SERVE_GAP_MS = 1200;
-  const MIN_SLOT_REFRESH_GAP_MS = 30000;
-  const VIEWPORT_THRESHOLD = 0.2;
-  const INTERSTITIAL_DELAY_MS = 1200;
-  const VIDEO_SLIDER_DELAY_MS = 5000;
-
-  const ZONES = {
-    topBanner: 5865232,
-    leftRail: 5865238,
-    rightRail: 5865240,
-    betweenMulti: 5867482
+  const CONFIG = {
+    libraryFile: "library.json",
+    mapsBasePath: "search_maps",
+    defaultWorksBase: "https://pub-cd01009a7c6c464aa0b093e33aa5ae51.r2.dev/works",
+    fallbackWorkBlockBase: "https://pub-f78ac228b8f14431804e721a35484412.r2.dev/works",
+    itemJsonName: "item.json",
+    searchResultsLimit: 12,
+    prefetchThreshold: 0.7,
+    toastMs: 1800
   };
 
-  const SPECIAL_ZONES = {
-    desktopInterstitial: {
-      zoneId: 5880058,
-      className: "eas6a97888e35",
-      host: "https://a.pemsrv.com/ad-provider.js"
-    },
-    mobileInterstitial: {
-      zoneId: 5880060,
-      className: "eas6a97888e33",
-      host: "https://a.pemsrv.com/ad-provider.js"
-    },
-    desktopVideoSlider: {
-      zoneId: 5880066,
-      className: "eas6a97888e31",
-      host: "https://a.magsrv.com/ad-provider.js"
-    },
-    desktopRecommend: {
-      zoneId: 5880068,
-      className: "eas6a97888e20",
-      host: "https://a.magsrv.com/ad-provider.js"
-    },
-    mobileSticky: {
-      zoneId: 5880082,
-      className: "eas6a97888e10",
-      host: "https://a.magsrv.com/ad-provider.js"
-    }
+  const ERROR = {
+    LIBRARY_FETCH_FAILED: "LIBRARY_FETCH_FAILED",
+    LIBRARY_INVALID: "LIBRARY_INVALID",
+    NO_WORKS_FOUND: "NO_WORKS_FOUND",
+    MAP_FETCH_FAILED: "MAP_FETCH_FAILED",
+    MAP_INVALID: "MAP_INVALID",
+    WORK_BLOCK_FETCH_FAILED: "WORK_BLOCK_FETCH_FAILED",
+    SEARCH_INDEX_BUILD_FAILED: "SEARCH_INDEX_BUILD_FAILED",
+    SELECTION_NOT_FOUND: "SELECTION_NOT_FOUND",
+    MANIFEST_FETCH_FAILED: "MANIFEST_FETCH_FAILED",
+    MANIFEST_INVALID: "MANIFEST_INVALID",
+    MANIFEST_NO_BASE_URL: "MANIFEST_NO_BASE_URL",
+    MANIFEST_NO_IMAGES: "MANIFEST_NO_IMAGES",
+    SWITCH_ENTRY_FAILED: "SWITCH_ENTRY_FAILED",
+    BUILD_READER_FAILED: "BUILD_READER_FAILED",
+    BOOT_FAILED: "BOOT_FAILED"
   };
 
-  const LEFT_RAIL_IDS = [
-    "leftRailSlot1","leftRailSlot2","leftRailSlot3","leftRailSlot4","leftRailSlot5","leftRailSlot6",
-    "leftRailSlot7","leftRailSlot8","leftRailSlot9","leftRailSlot10","leftRailSlot11","leftRailSlot12"
-  ];
+  const STATE = {
+    works: [],
+    sourceMap: {},
+    maps: new Map(),
+    searchRows: [],
+    currentWork: null,
+    currentEntry: null,
+    currentManifest: null,
+    nextPrefetch: null,
+    isMobileReader: document.body?.dataset?.readerMode === "mobile",
+    searchWired: false,
+    navWired: false,
+    progressWired: false,
+    dialWired: false,
+    stickyWired: false,
+    mobileOpenWorkSlug: ""
+  };
 
-  const RIGHT_RAIL_IDS = [
-    "rightRailSlot1","rightRailSlot2","rightRailSlot3","rightRailSlot4","rightRailSlot5","rightRailSlot6",
-    "rightRailSlot7","rightRailSlot8","rightRailSlot9","rightRailSlot10","rightRailSlot11","rightRailSlot12"
-  ];
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  let ARCHIVE_WORKS = [];
-  let SOURCE_MAP = {};
-  let CURRENT_WORK = null;
-  let CURRENT_ENTRY = null;
-  let CURRENT_ITEM = null;
-
-  let topFlyoutsWired = false;
-  let stickyControlsWired = false;
-  let searchWired = false;
-  let railRefreshTimer = null;
-  let bannerRefreshTimer = null;
-  let betweenRefreshTimer = null;
-  let mobileStickyRefreshTimer = null;
-  let nextPrefetch = null;
-  let progressWatchWired = false;
-  let bottomGlowTriggered = false;
-  let mobileWorksWired = false;
-  let mobileOpenWorkSlug = "";
-  let dialWired = false;
-
-  let adServeScheduled = false;
-  let lastServeAt = 0;
-  let adVisibilityObserver = null;
-  let adActionBurstCooldownUntil = 0;
-  let videoSliderLoaded = false;
-  let videoSliderScheduled = false;
-  let mobileStickyLoaded = false;
-  let retentionToastTimer = null;
-
-  const providerLoadPromises = new Map();
-
-  function $(sel, root = document) {
-    return root.querySelector(sel);
+  function createEl(tag, className = "", text = "") {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text) el.textContent = text;
+    return el;
   }
 
-  function $$(sel, root = document) {
-    return Array.from(root.querySelectorAll(sel));
+  function normalizeKey(v) {
+    return String(v ?? "").trim().toLowerCase();
   }
 
-  function escapeHtml(value) {
-    return String(value ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
-  }
-
-  function normalizeKey(value) {
-    return String(value ?? "").trim().toLowerCase();
+  function normalizeBaseUrl(url) {
+    return String(url || "").replace(/\/+$/, "");
   }
 
   function titleCaseSlug(slug) {
@@ -124,643 +71,599 @@
       .replace(/[_-]+/g, " ")
       .replace(/\s+/g, " ")
       .trim()
-      .replace(/\b\w/g, ch => ch.toUpperCase());
+      .replace(/\b\w/g, c => c.toUpperCase());
   }
 
-  function normalizeBaseUrl(url) {
-    return String(url || "").replace(/\/+$/, "");
-  }
-
-  function now() {
-    return Date.now();
-  }
-
-  function delay(ms) {
-    return new Promise(resolve => window.setTimeout(resolve, ms));
-  }
-
-  function isElementInViewport(el, threshold = VIEWPORT_THRESHOLD) {
-    if (!el || !el.isConnected) return false;
-
-    const rect = el.getBoundingClientRect();
-    const vw = window.innerWidth || document.documentElement.clientWidth;
-    const vh = window.innerHeight || document.documentElement.clientHeight;
-
-    if (rect.width <= 0 || rect.height <= 0) return false;
-    if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= vh || rect.left >= vw) return false;
-
-    const visibleX = Math.max(0, Math.min(rect.right, vw) - Math.max(rect.left, 0));
-    const visibleY = Math.max(0, Math.min(rect.bottom, vh) - Math.max(rect.top, 0));
-    const visibleArea = visibleX * visibleY;
-    const totalArea = rect.width * rect.height;
-    if (totalArea <= 0) return false;
-
-    return (visibleArea / totalArea) >= threshold;
-  }
-
-  function canRefreshSlot(el) {
-    if (!el) return false;
-    const last = Number(el.dataset.lastRefreshAt || 0);
-    return (now() - last) >= MIN_SLOT_REFRESH_GAP_MS;
-  }
-
-  function stampSlotRefresh(el) {
-    if (!el) return;
-    el.dataset.lastRefreshAt = String(now());
-  }
-
-  function markSlotSeen(el) {
-    if (!el) return;
-    el.dataset.seen = "1";
-  }
-
-  function resolveSourceKey(work, entry) {
-    return entry?.source || work?.source || "";
-  }
-
-  function getSourceBaseByKey(sourceKey) {
-    if (!sourceKey) return "";
-    return normalizeBaseUrl(SOURCE_MAP[sourceKey] || "");
-  }
-
-  function getWorkBase(work, entry) {
-    return normalizeBaseUrl(
-      entry?.base_url ||
-      getSourceBaseByKey(resolveSourceKey(work, entry)) ||
-      work?.base_url ||
-      DEFAULT_WORKS_BASE
-    );
-  }
-
-  function getItemJsonUrl(work, entry) {
-    if (entry?.item_url) return entry.item_url;
-
-    const entryPathOrSlug = entry?.path || entry?.slug || "";
-    const safeParts = String(entryPathOrSlug)
-      .split("/")
-      .filter(Boolean)
-      .map(part => encodeURIComponent(part));
-
-    return `${getWorkBase(work, entry)}/${encodeURIComponent(work.slug)}/${safeParts.join("/")}/${ITEM_JSON_NAME}`;
-  }
-
-  function scrollToReaderTopInstant() {
-    const target =
-      document.getElementById("readerTopAnchor") ||
-      document.getElementById("reader") ||
-      document.getElementById("searchBarAnchor");
-
-    if (target) {
-      target.scrollIntoView({ behavior: "auto", block: "start" });
-    } else {
-      window.scrollTo(0, 0);
-    }
-  }
-
-  function scrollToSearchBar() {
-    const target =
-      document.getElementById("searchBarAnchor") ||
-      document.querySelector(".hero");
-
-    if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }
-
-  function setMobileOpenWork(workSlug) {
-    mobileOpenWorkSlug = normalizeKey(workSlug || "");
-
-    const items = $$(".mobile-work-item");
-    items.forEach(item => {
-      const isOpen = normalizeKey(item.dataset.workSlug) === mobileOpenWorkSlug;
-      item.classList.toggle("open", isOpen);
-      item.classList.toggle("active", isOpen);
-    });
-  }
-
-  function syncDialThumb() {
-    if (!IS_MOBILE_READER) return;
-
-    const scrollEl = document.getElementById("worksNav");
-    const track = document.getElementById("dialTrack");
-    const thumb = document.getElementById("dialThumb");
-    if (!scrollEl || !track || !thumb) return;
-
-    const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
-    const trackH = track.clientHeight;
-    const thumbH = thumb.offsetHeight;
-    const maxTop = Math.max(0, trackH - thumbH);
-
-    const ratio = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 0;
-    thumb.style.top = `${maxTop * ratio}px`;
-  }
-
-  function wireMobileDial() {
-    if (!IS_MOBILE_READER || dialWired) return;
-    dialWired = true;
-
-    const scrollEl = document.getElementById("worksNav");
-    const track = document.getElementById("dialTrack");
-    const thumb = document.getElementById("dialThumb");
-    if (!scrollEl || !track || !thumb) return;
-
-    let dragging = false;
-
-    const moveThumb = (clientY) => {
-      const rect = track.getBoundingClientRect();
-      const thumbH = thumb.offsetHeight;
-      const maxTop = Math.max(0, rect.height - thumbH);
-
-      let top = clientY - rect.top - thumbH / 2;
-      top = Math.max(0, Math.min(maxTop, top));
-
-      const ratio = maxTop > 0 ? top / maxTop : 0;
-      const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
-
-      scrollEl.scrollTop = maxScroll * ratio;
-      thumb.style.top = `${top}px`;
-    };
-
-    track.addEventListener("pointerdown", (e) => {
-      dragging = true;
-      track.setPointerCapture?.(e.pointerId);
-      moveThumb(e.clientY);
-    });
-
-    track.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      moveThumb(e.clientY);
-    });
-
-    track.addEventListener("pointerup", (e) => {
-      dragging = false;
-      track.releasePointerCapture?.(e.pointerId);
-    });
-
-    track.addEventListener("pointercancel", () => {
-      dragging = false;
-    });
-
-    scrollEl.addEventListener("scroll", syncDialThumb, { passive: true });
-    window.addEventListener("resize", syncDialThumb);
-
-    syncDialThumb();
-  }
-
-  function rawServeAds() {
-    (window.AdProvider = window.AdProvider || []).push({ serve: {} });
-    lastServeAt = now();
-    adServeScheduled = false;
-  }
-
-  function serveAds(force = false) {
-    const elapsed = now() - lastServeAt;
-
-    if (force || elapsed >= MIN_GLOBAL_SERVE_GAP_MS) {
-      rawServeAds();
-      return;
-    }
-
-    if (adServeScheduled) return;
-    adServeScheduled = true;
-
-    window.setTimeout(() => {
-      rawServeAds();
-    }, Math.max(0, MIN_GLOBAL_SERVE_GAP_MS - elapsed));
-  }
-
-  function burstServeAds() {
-    if (document.hidden) return;
-
-    if (now() < adActionBurstCooldownUntil) return;
-    adActionBurstCooldownUntil = now() + 3500;
-
-    serveAds(true);
-    window.setTimeout(() => serveAds(true), 700);
-  }
-
-  function ensureAdProviderScript(src) {
-    if (!src) return Promise.resolve();
-
-    if (providerLoadPromises.has(src)) {
-      return providerLoadPromises.get(src);
-    }
-
-    const existing = document.querySelector(`script[src="${src}"]`);
-    if (existing) {
-      const done = Promise.resolve();
-      providerLoadPromises.set(src, done);
-      return done;
-    }
-
-    const promise = new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.async = true;
-      s.type = "application/javascript";
-      s.src = src;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error(`Failed to load ad provider: ${src}`));
-      document.head.appendChild(s);
-    });
-
-    providerLoadPromises.set(src, promise);
-    return promise;
-  }
-
-  function makeIns(zoneId, sub = 1, sub2 = 1, sub3 = 1, className = "eas6a97888e38") {
-    const ins = document.createElement("ins");
-    ins.className = className;
-    ins.setAttribute("data-zoneid", String(zoneId));
-    ins.setAttribute("data-sub", String(sub));
-    ins.setAttribute("data-sub2", String(sub2));
-    ins.setAttribute("data-sub3", String(sub3));
-    return ins;
-  }
-
-  function makeSpecialIns(zoneId, className) {
-    const ins = document.createElement("ins");
-    ins.className = className;
-    ins.setAttribute("data-zoneid", String(zoneId));
-    return ins;
-  }
-
-  function refillSlot(el, zoneId, sub = 1, sub2 = 1, sub3 = 1, className = "eas6a97888e38") {
-    if (!el) return;
-    el.innerHTML = "";
-    el.appendChild(makeIns(zoneId, sub, sub2, sub3, className));
-    stampSlotRefresh(el);
-  }
-
-  function fillSlot(el, zoneId, sub = 1, sub2 = 1, sub3 = 1, className = "eas6a97888e38") {
-    if (!el) return;
-    refillSlot(el, zoneId, sub, sub2, sub3, className);
-    serveAds();
-  }
-
-  function refillSlotIfVisible(el, zoneId, sub = 1, sub2 = 1, sub3 = 1, className = "eas6a97888e38") {
-    if (!el || document.hidden) return false;
-    if (!isElementInViewport(el)) return false;
-    if (!canRefreshSlot(el)) return false;
-
-    refillSlot(el, zoneId, sub, sub2, sub3, className);
-    markSlotSeen(el);
-    return true;
-  }
-
-  function createRuntimeMount(id) {
-    const mount = document.createElement("div");
-    mount.id = id;
-    mount.style.position = "relative";
-    mount.style.width = "0";
-    mount.style.height = "0";
-    mount.style.overflow = "visible";
-    mount.style.zIndex = "999999";
-    return mount;
-  }
-
-  async function mountRuntimeSpecial(id, cfg) {
-    if (!cfg) return null;
-    await ensureAdProviderScript(cfg.host);
-
-    let mount = document.getElementById(id);
-    if (!mount) {
-      mount = createRuntimeMount(id);
-      document.body.appendChild(mount);
-    }
-
-    mount.innerHTML = "";
-    mount.appendChild(makeSpecialIns(cfg.zoneId, cfg.className));
-    serveAds(true);
-
-    return mount;
-  }
-
-  async function fireChapterInterstitial() {
-    const cfg = IS_MOBILE_READER ? SPECIAL_ZONES.mobileInterstitial : SPECIAL_ZONES.desktopInterstitial;
-    const id = IS_MOBILE_READER ? "runtime-mobile-interstitial" : "runtime-desktop-interstitial";
-    await mountRuntimeSpecial(id, cfg);
-    await delay(INTERSTITIAL_DELAY_MS);
-  }
-
-  function positionDesktopStickyAwayFromVideo() {
-    if (IS_MOBILE_READER) return;
-
-    const stickyCluster = document.getElementById("stickyCluster");
-    const progressChip = document.querySelector(".chapter-progress-chip");
-
-    if (stickyCluster) {
-      stickyCluster.style.right = "auto";
-      stickyCluster.style.left = "18px";
-      stickyCluster.style.bottom = "18px";
-    }
-
-    if (progressChip) {
-      progressChip.style.left = "18px";
-      progressChip.style.right = "auto";
-      progressChip.style.bottom = "140px";
-    }
-  }
-
-  function scheduleVideoSlider() {
-    if (IS_MOBILE_READER || videoSliderLoaded || videoSliderScheduled) return;
-
-    videoSliderScheduled = true;
-    window.setTimeout(async () => {
-      if (videoSliderLoaded) return;
-      await mountRuntimeSpecial("runtime-desktop-video-slider", SPECIAL_ZONES.desktopVideoSlider);
-      videoSliderLoaded = true;
-      positionDesktopStickyAwayFromVideo();
-    }, VIDEO_SLIDER_DELAY_MS);
-  }
-
-  async function loadMobileStickyBanner(force = false) {
-    if (!IS_MOBILE_READER) return;
-
-    const mount = document.getElementById("mobileStickyMount");
-    if (!mount) return;
-    if (mobileStickyLoaded && !force) return;
-
-    await ensureAdProviderScript(SPECIAL_ZONES.mobileSticky.host);
-    mount.innerHTML = "";
-    mount.appendChild(makeSpecialIns(SPECIAL_ZONES.mobileSticky.zoneId, SPECIAL_ZONES.mobileSticky.className));
-    stampSlotRefresh(mount);
-    serveAds(true);
-    mobileStickyLoaded = true;
-  }
-
-  function setupAdVisibilityObserver() {
-    if (adVisibilityObserver) {
-      adVisibilityObserver.disconnect();
-      adVisibilityObserver = null;
-    }
-
-    adVisibilityObserver = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting && entry.target) {
-          markSlotSeen(entry.target);
-        }
-      }
-    }, {
-      root: null,
-      threshold: [0.2, 0.5]
-    });
-
-    $$(".slot, .top-banner-inner").forEach(el => {
-      adVisibilityObserver.observe(el);
-    });
+  function escapeHtml(str) {
+    return String(str ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
   async function fetchJson(url) {
     const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) {
-      throw new Error(`Failed to fetch ${url} (${res.status})`);
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
     return res.json();
   }
 
+  function appError(code, message, details = {}) {
+    const err = new Error(message);
+    err.code = code;
+    err.details = details;
+    return err;
+  }
+
+  function logError(err, context = "") {
+    const code = err?.code || "UNEXPECTED_ERROR";
+    const message = err?.message || "Unexpected error";
+    console.error(`[${code}]${context ? ` ${context}` : ""}: ${message}`, err?.details || {}, err);
+    return { code, message, details: err?.details || null };
+  }
+
+  function showFatalError(err) {
+    const payload = logError(err, "Fatal");
+    const title = $("#workTitle");
+    const reader = $("#reader");
+    const stat = $("#chapterSearchStat");
+
+    if (title) title.textContent = `Failed to load (${payload.code})`;
+    if (stat) stat.textContent = `Error: ${payload.code}`;
+
+    if (reader) {
+      reader.innerHTML = `
+        <div class="note">
+          <strong>Error code:</strong> ${escapeHtml(payload.code)}<br>
+          <strong>Message:</strong> ${escapeHtml(payload.message)}<br>
+          Check library.json, search_maps, item.json, base_url, and image paths.
+        </div>
+      `;
+    }
+  }
+
   async function loadLibrary() {
-    const data = await fetchJson(LIBRARY_FILE);
-    ARCHIVE_WORKS = Array.isArray(data.works) ? data.works : [];
-    SOURCE_MAP = data && typeof data.sources === "object" && data.sources ? data.sources : {};
+    let data;
+    try {
+      data = await fetchJson(CONFIG.libraryFile);
+    } catch (e) {
+      throw appError(ERROR.LIBRARY_FETCH_FAILED, "Failed to fetch library.json", { cause: e.message });
+    }
+
+    if (!data || typeof data !== "object" || !Array.isArray(data.works)) {
+      throw appError(ERROR.LIBRARY_INVALID, "library.json is invalid");
+    }
+
+    if (!data.works.length) {
+      throw appError(ERROR.NO_WORKS_FOUND, "library.json has no works");
+    }
+
+    STATE.works = data.works.filter(Boolean);
+    STATE.sourceMap = data.sources && typeof data.sources === "object" ? data.sources : {};
   }
 
-  function getQueryState() {
-    const url = new URL(window.location.href);
+  function getSourceBaseByKey(sourceKey) {
+    return sourceKey ? normalizeBaseUrl(STATE.sourceMap[sourceKey] || "") : "";
+  }
+
+  function workNeedsBlockFallback(work) {
+    if (!work) return true;
+    if (!Array.isArray(work.entries)) return true;
+    if (work.entries.length === 0) return true;
+    return false;
+  }
+
+  function getPrimaryWorkBlockUrl(work) {
+    const sourceBase = getSourceBaseByKey(work.source) || CONFIG.defaultWorksBase;
+    const slug = work.slug;
+    return `${sourceBase}/${encodeURIComponent(slug)}/manifest_work_block_${encodeURIComponent(slug)}.json`;
+  }
+
+  function getFallbackWorkBlockUrl(work) {
+    if (!CONFIG.fallbackWorkBlockBase) return null;
+    const slug = work.slug;
+    return `${CONFIG.fallbackWorkBlockBase}/${encodeURIComponent(slug)}/manifest_work_block_${encodeURIComponent(slug)}.json`;
+  }
+
+  function mergeWorkData(libraryWork, blockWork) {
     return {
-      dir: url.searchParams.get("dir") || "",
-      file: url.searchParams.get("file") || ""
+      id: libraryWork?.id ?? blockWork?.id ?? null,
+      slug: libraryWork?.slug || blockWork?.slug || "",
+      display: libraryWork?.display || blockWork?.display || titleCaseSlug(blockWork?.slug || ""),
+      top_pill: libraryWork?.top_pill ?? blockWork?.top_pill ?? true,
+      source: libraryWork?.source || blockWork?.source || "",
+      use_map: libraryWork?.use_map === true,
+      map_file: libraryWork?.map_file || null,
+      entries: Array.isArray(libraryWork?.entries) && libraryWork.entries.length
+        ? libraryWork.entries
+        : (Array.isArray(blockWork?.entries) ? blockWork.entries : [])
     };
   }
 
-  function setQueryState(dir, file, replace = false) {
-    const url = new URL(window.location.href);
-    url.searchParams.set("dir", dir);
-    url.searchParams.set("file", file);
+  async function loadWorkBlockWithFallback(work) {
+    const primaryUrl = getPrimaryWorkBlockUrl(work);
+    const fallbackUrl = getFallbackWorkBlockUrl(work);
 
-    if (replace) {
-      history.replaceState({ dir, file }, "", url);
-    } else {
-      history.pushState({ dir, file }, "", url);
-    }
-  }
+    try {
+      return await fetchJson(primaryUrl);
+    } catch (primaryErr) {
+      if (!fallbackUrl) {
+        throw appError(ERROR.WORK_BLOCK_FETCH_FAILED, "Primary work block fetch failed", {
+          slug: work.slug,
+          primaryUrl,
+          cause: primaryErr.message
+        });
+      }
 
-  function getFirstEntry() {
-    for (const work of ARCHIVE_WORKS) {
-      const first = Array.isArray(work.entries) ? work.entries[0] : null;
-      if (work?.slug && first?.slug) {
-        return { work, entry: first };
+      try {
+        return await fetchJson(fallbackUrl);
+      } catch (fallbackErr) {
+        throw appError(ERROR.WORK_BLOCK_FETCH_FAILED, "Primary and fallback work block fetch failed", {
+          slug: work.slug,
+          primaryUrl,
+          fallbackUrl,
+          primaryCause: primaryErr.message,
+          fallbackCause: fallbackErr.message
+        });
       }
     }
-    return { work: null, entry: null };
   }
 
-  function resolveSelection(dir, file) {
-    const d = normalizeKey(dir);
-    const f = normalizeKey(file);
+  async function hydrateWorksFromBlocksIfNeeded() {
+    const resolved = [];
 
-    for (const work of ARCHIVE_WORKS) {
-      if (normalizeKey(work.slug) !== d) continue;
-      for (const entry of work.entries || []) {
-        if (normalizeKey(entry.slug) === f) {
-          return { work, entry };
-        }
+    for (const work of STATE.works) {
+      if (!workNeedsBlockFallback(work)) {
+        resolved.push(work);
+        continue;
+      }
+
+      try {
+        const blockWork = await loadWorkBlockWithFallback(work);
+        resolved.push(mergeWorkData(work, blockWork));
+      } catch (err) {
+        logError(err, `Work block fallback failed for ${work.slug}`);
+        resolved.push(work);
       }
     }
 
-    return null;
+    STATE.works = resolved;
   }
 
-  function buildImageList(manifest) {
-    if (Array.isArray(manifest.images) && manifest.images.length) {
-      return manifest.images;
-    }
-
-    if (Number.isFinite(manifest.pages) && manifest.pages > 0) {
-      const ext = manifest.extension || "jpg";
-      const padding = Number.isFinite(manifest.padding) ? manifest.padding : 2;
-
-      return Array.from({ length: manifest.pages }, (_, i) => {
-        const n = String(i + 1).padStart(padding, "0");
-        return `${n}.${ext}`;
-      });
-    }
-
-    return [];
+  function shouldUseMap(work) {
+    return work?.use_map === true;
   }
 
-  function getSubids(manifest) {
-    const fallbackWork = Number(manifest.parent_work_id) || 1;
-
-    return {
-      work: manifest.subids?.work ?? fallbackWork,
-      top: manifest.subids?.top ?? fallbackWork + 10,
-      left: manifest.subids?.left ?? fallbackWork + 20,
-      right: manifest.subids?.right ?? fallbackWork + 30,
-      between: manifest.subids?.between ?? fallbackWork + 40
-    };
+  function getMapFile(work) {
+    if (!shouldUseMap(work)) return null;
+    return `${CONFIG.mapsBasePath}/${work.map_file || `${work.slug}.json`}`;
   }
 
-  function imageBlock(src, alt) {
-    const wrap = document.createElement("div");
-    wrap.className = "image-wrap";
-
-    const img = document.createElement("img");
-    img.src = src;
-    img.alt = alt;
-    img.loading = "lazy";
-    img.decoding = "async";
-
-    wrap.appendChild(img);
-    return wrap;
+  function getMap(workOrSlug) {
+    const slug = typeof workOrSlug === "string" ? workOrSlug : workOrSlug?.slug;
+    return slug ? (STATE.maps.get(slug) || null) : null;
   }
 
-  function betweenAd(manifest, groupNumber, slotCount) {
-    const subids = getSubids(manifest);
+  async function loadWorkMap(work) {
+    if (!shouldUseMap(work)) return null;
+    if (STATE.maps.has(work.slug)) return STATE.maps.get(work.slug);
 
-    const wrap = document.createElement("div");
-    wrap.className = "between-grid";
+    const path = getMapFile(work);
 
-    for (let i = 1; i <= slotCount; i++) {
-      const slot = document.createElement("div");
-      slot.className = "slot between-slot";
-      slot.dataset.zoneType = "between";
-      slot.dataset.zoneId = String(ZONES.betweenMulti);
-      slot.dataset.sub = String(subids.between);
-      slot.dataset.sub2 = String(subids.work);
-      slot.dataset.sub3 = String(Number(`${groupNumber}${i}`));
-
-      slot.appendChild(
-        makeIns(ZONES.betweenMulti, subids.between, subids.work, Number(`${groupNumber}${i}`))
+    try {
+      const map = await fetchJson(path);
+      if (!map || typeof map !== "object" || Array.isArray(map)) {
+        throw appError(ERROR.MAP_INVALID, `Invalid map for ${work.slug}`, { path });
+      }
+      STATE.maps.set(work.slug, map);
+      return map;
+    } catch (e) {
+      logError(
+        appError(
+          e.code || ERROR.MAP_FETCH_FAILED,
+          `Failed to load map for ${work.slug}`,
+          { work: work.slug, path, cause: e.message }
+        ),
+        "Map"
       );
-      wrap.appendChild(slot);
+      STATE.maps.set(work.slug, null);
+      return null;
     }
-
-    return wrap;
   }
 
-  function endAds(manifest, count) {
-    const subids = getSubids(manifest);
-
-    const wrap = document.createElement("div");
-    wrap.className = "end-grid";
-
-    for (let i = 1; i <= count; i++) {
-      const slot = document.createElement("div");
-      slot.className = "slot between-slot";
-      slot.dataset.zoneType = "between";
-      slot.dataset.zoneId = String(ZONES.betweenMulti);
-      slot.dataset.sub = String(subids.between);
-      slot.dataset.sub2 = String(subids.work);
-      slot.dataset.sub3 = String(9000 + i);
-
-      slot.appendChild(makeIns(ZONES.betweenMulti, subids.between, subids.work, 9000 + i));
-      wrap.appendChild(slot);
-    }
-
-    return wrap;
+  async function loadAllMaps() {
+    await Promise.all(STATE.works.filter(shouldUseMap).map(loadWorkMap));
   }
 
-  function buildRecommendationWidget() {
-    if (IS_MOBILE_READER) return null;
-
-    const shell = document.createElement("section");
-    shell.className = "recommend-shell";
-
-    const title = document.createElement("p");
-    title.className = "recommend-title";
-    title.textContent = "More To Read";
-    shell.appendChild(title);
-
-    const slot = document.createElement("div");
-    slot.className = "slot recommend-slot";
-    slot.appendChild(makeSpecialIns(SPECIAL_ZONES.desktopRecommend.zoneId, SPECIAL_ZONES.desktopRecommend.className));
-    shell.appendChild(slot);
-
-    return shell;
+  function sortVolumeSlug(a, b) {
+    const ma = String(a).match(/^volume_(\d+)$/i);
+    const mb = String(b).match(/^volume_(\d+)$/i);
+    if (ma && mb) return Number(ma[1]) - Number(mb[1]);
+    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   }
 
-  function fillRailStacks(subids) {
-    LEFT_RAIL_IDS.forEach((id, index) => {
-      fillSlot(document.getElementById(id), ZONES.leftRail, subids.left, subids.work, index + 1);
-    });
-
-    RIGHT_RAIL_IDS.forEach((id, index) => {
-      fillSlot(document.getElementById(id), ZONES.rightRail, subids.right, subids.work, index + 1);
-    });
+  function sortChapterSlug(a, b) {
+    const ma = String(a).match(/^chapter_(\d+)$/i);
+    const mb = String(b).match(/^chapter_(\d+)$/i);
+    if (ma && mb) return Number(ma[1]) - Number(mb[1]);
+    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   }
 
-  function flattenEntries() {
-    const rows = [];
+  function getMapVolumeEntries(work) {
+    const map = getMap(work);
+    const chapterLocations = map?.chapter_locations;
+    if (!chapterLocations || typeof chapterLocations !== "object") return [];
 
-    for (const work of ARCHIVE_WORKS) {
-      for (const entry of work.entries || []) {
-        rows.push({
-          workSlug: work.slug,
-          workLabel: work.display || titleCaseSlug(work.slug),
-          entrySlug: entry.slug,
-          entryLabel: entry.subtitle || titleCaseSlug(entry.slug),
-          searchKey: normalizeKey(
-            `${work.display || work.slug} ${entry.subtitle || entry.slug} ${entry.slug}`
-          )
+    return Object.keys(chapterLocations)
+      .sort(sortVolumeSlug)
+      .map(volumeSlug => {
+        const volumeMeta = chapterLocations[volumeSlug] || {};
+        const chaptersObj = volumeMeta.chapters || {};
+        const chapterKeys = Object.keys(chaptersObj).sort(sortChapterSlug);
+        const firstChapterSlug = chapterKeys[0] || "";
+
+        return {
+          slug: volumeSlug,
+          type: "mapped_volume",
+          subtitle: volumeMeta.display_label || titleCaseSlug(volumeSlug),
+          map_display_label: volumeMeta.display_label || titleCaseSlug(volumeSlug),
+          volume_slug: volumeSlug,
+          map_first_chapter_slug: firstChapterSlug,
+          chapter_numbers: Array.isArray(volumeMeta.chapter_numbers) ? volumeMeta.chapter_numbers : [],
+          search_terms: Array.isArray(volumeMeta.search_terms) ? volumeMeta.search_terms : []
+        };
+      });
+  }
+
+  function getMapChapterEntries(work) {
+    const map = getMap(work);
+    const chapterLocations = map?.chapter_locations;
+    if (!chapterLocations || typeof chapterLocations !== "object") return [];
+
+    const out = [];
+
+    for (const volumeSlug of Object.keys(chapterLocations).sort(sortVolumeSlug)) {
+      const volumeMeta = chapterLocations[volumeSlug] || {};
+      const chaptersObj = volumeMeta.chapters || {};
+
+      for (const chapterSlug of Object.keys(chaptersObj).sort(sortChapterSlug)) {
+        const chapterMeta = chaptersObj[chapterSlug] || {};
+        const pages = Array.isArray(chapterMeta.pages) ? chapterMeta.pages : [];
+        if (!pages.length) continue;
+
+        out.push({
+          slug: `${volumeSlug}__${chapterSlug}`,
+          type: "mapped_chapter",
+          subtitle: chapterMeta.display_label || titleCaseSlug(chapterSlug),
+          map_display_label: chapterMeta.display_label || titleCaseSlug(chapterSlug),
+          map_parent_label: volumeMeta.display_label || titleCaseSlug(volumeSlug),
+          volume_slug: volumeSlug,
+          chapter_slug: chapterSlug,
+          chapter_number: Number(chapterMeta.chapter_number ?? 0) || null,
+          page_count: pages.length,
+          map_pages: pages
         });
       }
     }
 
-    return rows;
+    return out;
+  }
+
+  function getVisibleEntries(work) {
+    if (!shouldUseMap(work)) {
+      return Array.isArray(work.entries) ? work.entries : [];
+    }
+
+    const mappedVolumes = getMapVolumeEntries(work);
+    return mappedVolumes.length ? mappedVolumes : (Array.isArray(work.entries) ? work.entries : []);
+  }
+
+  function getChapterSequenceEntries(work) {
+    if (!shouldUseMap(work)) {
+      return Array.isArray(work.entries) ? work.entries : [];
+    }
+
+    const mappedChapters = getMapChapterEntries(work);
+    return mappedChapters.length ? mappedChapters : (Array.isArray(work.entries) ? work.entries : []);
+  }
+
+  function getMappedChapterMeta(work, entry) {
+    if (!shouldUseMap(work) || !entry) return null;
+    const map = getMap(work);
+    if (!map?.chapter_locations) return null;
+
+    if (entry.type === "mapped_volume") {
+      return map.chapter_locations?.[entry.volume_slug || entry.slug] || null;
+    }
+
+    if (entry.type === "mapped_chapter") {
+      return map.chapter_locations?.[entry.volume_slug]?.chapters?.[entry.chapter_slug] || null;
+    }
+
+    return map.chapter_locations?.[entry.slug] || null;
+  }
+
+  function getChapterMeta(work, entry) {
+    return getMappedChapterMeta(work, entry);
+  }
+
+  function getEntryDisplayLabel(work, entry) {
+    if (entry?.map_display_label) return entry.map_display_label;
+    const meta = getChapterMeta(work, entry);
+    return meta?.display_label || entry?.subtitle || titleCaseSlug(entry?.slug || "");
+  }
+
+  function getFirstChapterEntryForVolume(work, volumeSlug) {
+    return getChapterSequenceEntries(work).find(
+      entry => normalizeKey(entry.volume_slug) === normalizeKey(volumeSlug)
+    ) || null;
+  }
+
+  function getEntryBySlug(work, slug) {
+    if (!work || !slug) return null;
+
+    if (shouldUseMap(work)) {
+      const chapterHit = getChapterSequenceEntries(work).find(
+        e => normalizeKey(e.slug) === normalizeKey(slug)
+      );
+      if (chapterHit) return chapterHit;
+
+      const volumeHit = getVisibleEntries(work).find(
+        e => normalizeKey(e.slug) === normalizeKey(slug)
+      );
+      if (volumeHit) {
+        return getFirstChapterEntryForVolume(work, volumeHit.volume_slug || volumeHit.slug) || volumeHit;
+      }
+    }
+
+    return (Array.isArray(work.entries) ? work.entries : []).find(
+      e => normalizeKey(e.slug) === normalizeKey(slug)
+    ) || null;
+  }
+
+  function isVisibleEntryCurrent(work, visibleEntry) {
+    if (!work || !visibleEntry || !STATE.currentEntry) return false;
+
+    if (visibleEntry.type === "mapped_volume") {
+      return normalizeKey(visibleEntry.volume_slug || visibleEntry.slug) ===
+             normalizeKey(STATE.currentEntry.volume_slug || STATE.currentEntry.slug);
+    }
+
+    return normalizeKey(visibleEntry.slug) === normalizeKey(STATE.currentEntry.slug);
+  }
+
+  function makeSearchRow(row) {
+    return {
+      type: row.type || "entry",
+      workSlug: row.workSlug,
+      workLabel: row.workLabel,
+      entrySlug: row.entrySlug || "",
+      entryLabel: row.entryLabel || "",
+      subLabel: row.subLabel || "",
+      page: row.page ?? null,
+      zoneId: row.zoneId ?? null,
+      searchKey: normalizeKey(row.searchKey || "")
+    };
+  }
+
+  function buildSearchIndex() {
+    try {
+      const rows = [];
+
+      for (const work of STATE.works) {
+        const workLabel = work.display || titleCaseSlug(work.slug);
+        const map = getMap(work);
+
+        if (shouldUseMap(work)) {
+          const volumeEntries = getVisibleEntries(work);
+          const chapterEntries = getChapterSequenceEntries(work);
+
+          for (const entry of volumeEntries) {
+            const volumeMeta = getMappedChapterMeta(work, entry);
+
+            rows.push(makeSearchRow({
+              type: "entry",
+              workSlug: work.slug,
+              workLabel,
+              entrySlug: entry.slug,
+              entryLabel: getEntryDisplayLabel(work, entry),
+              subLabel: "Mapped volume",
+              searchKey: [
+                workLabel,
+                entry.slug,
+                entry.subtitle || "",
+                entry.map_display_label || "",
+                ...(volumeMeta?.search_terms || []),
+                ...(volumeMeta?.chapter_numbers || []).map(n => `chapter ${n}`)
+              ].join(" ")
+            }));
+          }
+
+          for (const entry of chapterEntries) {
+            rows.push(makeSearchRow({
+              type: "chapter",
+              workSlug: work.slug,
+              workLabel,
+              entrySlug: entry.slug,
+              entryLabel: getEntryDisplayLabel(work, entry),
+              subLabel: entry.map_parent_label || "Mapped chapter",
+              searchKey: [
+                workLabel,
+                entry.slug,
+                entry.subtitle || "",
+                entry.map_display_label || "",
+                entry.map_parent_label || "",
+                String(entry.chapter_number || ""),
+                ...(entry.map_pages || []).map(p => p.local_name || "")
+              ].join(" ")
+            }));
+          }
+        } else {
+          for (const entry of work.entries || []) {
+            const chapterMeta = getChapterMeta(work, entry);
+
+            rows.push(makeSearchRow({
+              type: "entry",
+              workSlug: work.slug,
+              workLabel,
+              entrySlug: entry.slug,
+              entryLabel: getEntryDisplayLabel(work, entry),
+              subLabel: entry.subtitle || "",
+              searchKey: [
+                workLabel,
+                entry.slug,
+                entry.subtitle || "",
+                chapterMeta?.display_label || "",
+                ...(chapterMeta?.search_terms || [])
+              ].join(" ")
+            }));
+          }
+        }
+
+        if (!map) continue;
+
+        for (const arc of (map.arcs || [])) {
+          rows.push(makeSearchRow({
+            type: "arc",
+            workSlug: work.slug,
+            workLabel,
+            entrySlug: arc.target_entry_slug || arc.entry_slugs?.[0] || "",
+            entryLabel: arc.label || "Arc",
+            subLabel: `Arc · Chapters ${arc.chapter_start ?? "?"}-${arc.chapter_end ?? "?"}`,
+            searchKey: [
+              workLabel,
+              arc.label || "",
+              ...(arc.search_terms || [])
+            ].join(" ")
+          }));
+        }
+
+        for (const semantic of (map.semantic_links || [])) {
+          rows.push(makeSearchRow({
+            type: semantic.type || "tag_cluster",
+            workSlug: work.slug,
+            workLabel,
+            entrySlug: semantic.entry_slug || "",
+            entryLabel: semantic.label || "Semantic cluster",
+            subLabel: semantic.summary || "Semantic cluster",
+            searchKey: [
+              workLabel,
+              semantic.label || "",
+              semantic.summary || "",
+              ...(semantic.tags || []),
+              ...(semantic.search_terms || [])
+            ].join(" ")
+          }));
+        }
+
+        for (const anno of (map.image_annotations || [])) {
+          rows.push(makeSearchRow({
+            type: "annotation",
+            workSlug: work.slug,
+            workLabel,
+            entrySlug: anno.entry_slug || "",
+            entryLabel: anno.label || "Annotation",
+            subLabel: `Page ${anno.page ?? "?"}${anno.layer ? ` · ${anno.layer}` : ""}`,
+            page: anno.page ?? null,
+            zoneId: anno.id || null,
+            searchKey: [
+              workLabel,
+              anno.label || "",
+              anno.summary || "",
+              ...(anno.tags || []),
+              ...(anno.search_terms || [])
+            ].join(" ")
+          }));
+        }
+      }
+
+      STATE.searchRows = rows;
+    } catch (e) {
+      throw appError(ERROR.SEARCH_INDEX_BUILD_FAILED, "Failed to build search index", { cause: e.message });
+    }
   }
 
   function renderSearchResults(items) {
-    const results = document.getElementById("chapterSearchResults");
-    const stat = document.getElementById("chapterSearchStat");
+    const results = $("#chapterSearchResults");
+    const stat = $("#chapterSearchStat");
     if (!results || !stat) return;
 
     if (!items.length) {
       results.innerHTML = "";
-      stat.textContent = IS_MOBILE_READER ? "Type to search" : "No matches yet";
+      stat.textContent = STATE.isMobileReader ? "Type to search" : "No matches";
       return;
     }
 
-    stat.textContent = `${items.length} quick jump${items.length === 1 ? "" : "s"}`;
+    stat.textContent = `${items.length} result${items.length === 1 ? "" : "s"}`;
+
     results.innerHTML = items.map(item => `
-      <button class="search-result-pill" type="button" data-dir="${escapeHtml(item.workSlug)}" data-file="${escapeHtml(item.entrySlug)}">
-        ${escapeHtml(item.workLabel)} · ${escapeHtml(item.entryLabel)}
+      <button
+        class="search-result-pill search-result-pill--${escapeHtml(item.type)}"
+        type="button"
+        data-dir="${escapeHtml(item.workSlug)}"
+        data-file="${escapeHtml(item.entrySlug)}"
+        data-page="${item.page ?? ""}"
+        data-zone="${escapeHtml(item.zoneId || "")}"
+      >
+        <span class="search-result-main">${escapeHtml(item.workLabel)} · ${escapeHtml(item.entryLabel)}</span>
+        ${item.subLabel ? `<span class="search-result-sub">${escapeHtml(item.subLabel)}</span>` : ""}
       </button>
     `).join("");
   }
 
+  function syncSearchSeed() {
+    const input = $("#chapterSearchInput");
+    const stat = $("#chapterSearchStat");
+    const results = $("#chapterSearchResults");
+    if (!input || !stat || !results) return;
+    if (input.value.trim()) return;
+
+    if (STATE.isMobileReader) {
+      results.innerHTML = "";
+      stat.textContent = "Type to search";
+      return;
+    }
+
+    const seeded = STATE.searchRows
+      .filter(item => item.workSlug === STATE.currentWork?.slug)
+      .slice(0, CONFIG.searchResultsLimit);
+
+    renderSearchResults(seeded);
+    stat.textContent = seeded.length ? `Showing ${seeded.length} in this work` : "Ready to jump";
+  }
+
   function wireSearch() {
-    if (searchWired) return;
-    searchWired = true;
+    if (STATE.searchWired) return;
+    STATE.searchWired = true;
 
-    const input = document.getElementById("chapterSearchInput");
-    const results = document.getElementById("chapterSearchResults");
-    const stat = document.getElementById("chapterSearchStat");
+    const input = $("#chapterSearchInput");
+    const results = $("#chapterSearchResults");
+    const stat = $("#chapterSearchStat");
     if (!input || !results || !stat) return;
-
-    const all = flattenEntries();
 
     const refresh = () => {
       const query = normalizeKey(input.value);
 
       if (!query) {
-        if (IS_MOBILE_READER) {
+        if (STATE.isMobileReader) {
           results.innerHTML = "";
           stat.textContent = "Type to search";
           return;
         }
 
-        const seeded = all
-          .filter(item => item.workSlug === CURRENT_WORK?.slug)
-          .slice(0, SEARCH_RESULTS_LIMIT);
+        const seeded = STATE.searchRows
+          .filter(item => item.workSlug === STATE.currentWork?.slug)
+          .slice(0, CONFIG.searchResultsLimit);
 
         renderSearchResults(seeded);
         stat.textContent = seeded.length ? `Showing ${seeded.length} in this work` : "Ready to jump";
         return;
       }
 
-      const matched = all
+      const matched = STATE.searchRows
         .filter(item => item.searchKey.includes(query))
-        .slice(0, SEARCH_RESULTS_LIMIT);
+        .slice(0, CONFIG.searchResultsLimit);
 
       renderSearchResults(matched);
       stat.textContent = matched.length ? `${matched.length} result${matched.length === 1 ? "" : "s"}` : "No matches";
@@ -768,97 +671,248 @@
 
     input.addEventListener("input", refresh);
 
-    input.addEventListener("focus", () => {
-      burstServeAds();
-    });
-
     results.addEventListener("click", async (e) => {
       const btn = e.target.closest("button[data-dir][data-file]");
       if (!btn) return;
 
       input.value = "";
-
-      if (IS_MOBILE_READER) {
+      if (STATE.isMobileReader) {
         results.innerHTML = "";
         stat.textContent = "Type to search";
         setMobileOpenWork(btn.dataset.dir);
       }
 
-      burstServeAds();
       await switchEntry(btn.dataset.dir, btn.dataset.file, false, { actionSource: "search" });
 
-      if (IS_MOBILE_READER) {
-        scrollToReaderTopInstant();
+      const page = Number(btn.dataset.page || "");
+      if (Number.isFinite(page) && page > 0) {
+        setTimeout(() => scrollToPageIndex(page), 50);
       }
     });
 
     refresh();
   }
 
-  function syncSearchSeed() {
-    const input = document.getElementById("chapterSearchInput");
-    const stat = document.getElementById("chapterSearchStat");
-    const results = document.getElementById("chapterSearchResults");
-    if (!input || !stat || !results) return;
-    if (input.value.trim()) return;
+  function resolveSourceKey(work, entry) {
+    return entry?.source || work?.source || "";
+  }
 
-    if (IS_MOBILE_READER) {
-      results.innerHTML = "";
-      stat.textContent = "Type to search";
-      return;
+  function getWorkBase(work, entry) {
+    return normalizeBaseUrl(
+      entry?.base_url ||
+      getSourceBaseByKey(resolveSourceKey(work, entry)) ||
+      work?.base_url ||
+      CONFIG.defaultWorksBase
+    );
+  }
+
+  function getItemJsonUrl(work, entry) {
+    if (entry?.item_url) return entry.item_url;
+
+    const path = String(entry?.path || entry?.slug || "");
+    const safeParts = path.split("/").filter(Boolean).map(part => encodeURIComponent(part));
+    return `${getWorkBase(work, entry)}/${encodeURIComponent(work.slug)}/${safeParts.join("/")}/${CONFIG.itemJsonName}`;
+  }
+
+  function resolveSelection(dir, file) {
+    const work = STATE.works.find(w => normalizeKey(w.slug) === normalizeKey(dir));
+    if (!work) return null;
+
+    const entry = getEntryBySlug(work, file);
+    if (!entry) return null;
+
+    return { work, entry };
+  }
+
+  function resolveDefaultSelection() {
+    const work = STATE.works[0];
+    if (!work) return null;
+
+    const entries = shouldUseMap(work) ? getChapterSequenceEntries(work) : (work.entries || []);
+    const entry = entries[0];
+    return work && entry ? { work, entry } : null;
+  }
+
+  function resolveSelectionFromQuery() {
+    const url = new URL(window.location.href);
+    const dir = url.searchParams.get("dir");
+    const file = url.searchParams.get("file");
+    if (!dir || !file) return null;
+    return resolveSelection(dir, file);
+  }
+
+  function setQueryState(dir, file, replace = false) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("dir", dir);
+    url.searchParams.set("file", file);
+    if (replace) history.replaceState({}, "", url);
+    else history.pushState({}, "", url);
+  }
+
+  function getEntryIndex(work, entry) {
+    const entries = shouldUseMap(work) ? getChapterSequenceEntries(work) : (work?.entries || []);
+    return entries.findIndex(e => normalizeKey(e.slug) === normalizeKey(entry?.slug));
+  }
+
+  function getEntryByOffset(work, entry, offset) {
+    const entries = shouldUseMap(work) ? getChapterSequenceEntries(work) : (work?.entries || []);
+    const currentIndex = getEntryIndex(work, entry);
+    if (currentIndex < 0) return null;
+    return entries[currentIndex + offset] || null;
+  }
+
+  function getSubids(manifest) {
+    const subids = manifest?.subids || {};
+    return {
+      work: Number(subids.work) || 1101,
+      top: Number(subids.top) || 5865232,
+      left: Number(subids.left) || 5865238,
+      right: Number(subids.right) || 5865240,
+      between: Number(subids.between) || 5867482
+    };
+  }
+
+  function makeIns(zoneId) {
+    const ins = document.createElement("ins");
+    ins.className = "eas6a97888e2";
+    ins.dataset.zoneid = String(zoneId);
+    ins.style.display = "block";
+    return ins;
+  }
+
+  function serveAdsSafe() {
+    try {
+      window.AdProvider = window.AdProvider || [];
+      window.AdProvider.push({ serve: {} });
+    } catch (err) {
+      console.warn("Ad serve failed", err);
+    }
+  }
+
+  function buildTopBanner(manifest) {
+    const shell = document.getElementById("topBannerSlot") || document.querySelector(".top-banner-inner");
+    if (!shell) return;
+
+    const subids = getSubids(manifest);
+    shell.innerHTML = "";
+    shell.appendChild(makeIns(subids.top));
+  }
+
+  function fillRail(slotId, zoneId) {
+    const slot = document.getElementById(slotId);
+    if (!slot) return;
+
+    slot.innerHTML = "";
+    slot.classList.add("slot");
+    slot.appendChild(makeIns(zoneId));
+  }
+
+  function buildRails(manifest) {
+    const subids = getSubids(manifest);
+
+    const LEFT_RAIL_IDS = [
+      "leftRailSlot1","leftRailSlot2","leftRailSlot3","leftRailSlot4","leftRailSlot5","leftRailSlot6",
+      "leftRailSlot7","leftRailSlot8","leftRailSlot9","leftRailSlot10","leftRailSlot11","leftRailSlot12"
+    ];
+
+    const RIGHT_RAIL_IDS = [
+      "rightRailSlot1","rightRailSlot2","rightRailSlot3","rightRailSlot4","rightRailSlot5","rightRailSlot6",
+      "rightRailSlot7","rightRailSlot8","rightRailSlot9","rightRailSlot10","rightRailSlot11","rightRailSlot12"
+    ];
+
+    for (const id of LEFT_RAIL_IDS) fillRail(id, subids.left);
+    for (const id of RIGHT_RAIL_IDS) fillRail(id, subids.right);
+  }
+
+  function betweenAd(manifest, groupNumber, betweenSlots) {
+    const subids = getSubids(manifest);
+    const wrap = createEl("section", "between-grid");
+    const count = Math.max(1, Number(betweenSlots) || 3);
+
+    for (let i = 0; i < count; i += 1) {
+      const slot = createEl("div", "slot between-slot");
+      slot.dataset.group = String(groupNumber);
+      slot.dataset.index = String(i + 1);
+      slot.appendChild(makeIns(subids.between));
+      wrap.appendChild(slot);
     }
 
-    const seeded = flattenEntries()
-      .filter(item => item.workSlug === CURRENT_WORK?.slug)
-      .slice(0, SEARCH_RESULTS_LIMIT);
+    return wrap;
+  }
 
-    renderSearchResults(seeded);
-    stat.textContent = seeded.length ? `Showing ${seeded.length} in this work` : "Ready to jump";
+  function endAds(manifest, finalBlock) {
+    const subids = getSubids(manifest);
+    const wrap = createEl("section", "end-grid");
+    const count = Math.max(1, Number(finalBlock) || 6);
+
+    for (let i = 0; i < count; i += 1) {
+      const slot = createEl("div", "slot end-slot");
+      slot.dataset.final = "1";
+      slot.dataset.index = String(i + 1);
+      slot.appendChild(makeIns(subids.between));
+      wrap.appendChild(slot);
+    }
+
+    return wrap;
+  }
+
+  function setMobileOpenWork(workSlug) {
+    STATE.mobileOpenWorkSlug = normalizeKey(workSlug || "");
+
+    $$(".mobile-work-item").forEach(item => {
+      const isOpen = normalizeKey(item.dataset.workSlug) === STATE.mobileOpenWorkSlug;
+      item.classList.toggle("open", isOpen);
+      item.classList.toggle("active", isOpen);
+    });
+  }
+
+  function syncDialThumb() {
+    if (!STATE.isMobileReader) return;
+
+    const scrollEl = $("#worksNav");
+    const track = $("#dialTrack");
+    const thumb = $("#dialThumb");
+    if (!scrollEl || !track || !thumb) return;
+
+    const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    const thumbH = thumb.offsetHeight || 32;
+    const maxTop = Math.max(0, track.clientHeight - thumbH);
+    const ratio = maxScroll > 0 ? scrollEl.scrollTop / maxScroll : 0;
+    thumb.style.top = `${maxTop * ratio}px`;
   }
 
   function renderWorksNav() {
-    const nav = document.getElementById("worksNav");
+    const nav = $("#worksNav");
     if (!nav) return;
 
-    if (IS_MOBILE_READER) {
+    if (STATE.isMobileReader) {
       let html = "";
 
-      for (const work of ARCHIVE_WORKS.filter(w => w.top_pill !== false)) {
-        const isActiveWork = normalizeKey(work.slug) === normalizeKey(CURRENT_WORK?.slug);
-        const isOpen = normalizeKey(work.slug) === normalizeKey(mobileOpenWorkSlug || CURRENT_WORK?.slug);
-        const entries = Array.isArray(work.entries) ? work.entries : [];
+      for (const work of STATE.works.filter(w => w.top_pill !== false)) {
+        const isActiveWork = normalizeKey(work.slug) === normalizeKey(STATE.currentWork?.slug);
+        const isOpen = normalizeKey(work.slug) === normalizeKey(STATE.mobileOpenWorkSlug || STATE.currentWork?.slug);
+        const entries = getVisibleEntries(work);
 
         html += `
           <section class="mobile-work-item${isActiveWork ? " active" : ""}${isOpen ? " open" : ""}" data-work-slug="${escapeHtml(work.slug)}">
             <button class="mobile-work-trigger" type="button" data-work-toggle="${escapeHtml(work.slug)}">
               <span class="label">${escapeHtml(work.display || titleCaseSlug(work.slug))}</span>
-              <span class="count">${entries.length} ${entries.length === 1 ? "chapter" : "chapters"}</span>
+              <span class="count">${entries.length} ${entries.length === 1 ? "entry" : "entries"}</span>
             </button>
             <div class="mobile-chapters">
         `;
 
         for (const entry of entries) {
-          const active =
-            isActiveWork && normalizeKey(entry.slug) === normalizeKey(CURRENT_ENTRY?.slug)
-              ? " current"
-              : "";
+          const current = isActiveWork && isVisibleEntryCurrent(work, entry) ? " current" : "";
 
           html += `
-            <button
-              class="mobile-chapter-link${active}"
-              type="button"
-              data-dir="${escapeHtml(work.slug)}"
-              data-file="${escapeHtml(entry.slug)}"
-            >
-              ${escapeHtml(entry.subtitle || titleCaseSlug(entry.slug))}
+            <button class="mobile-chapter-link${current}" type="button" data-dir="${escapeHtml(work.slug)}" data-file="${escapeHtml(entry.slug)}">
+              ${escapeHtml(getEntryDisplayLabel(work, entry))}
             </button>
           `;
         }
 
-        html += `
-            </div>
-          </section>
-        `;
+        html += `</div></section>`;
       }
 
       nav.innerHTML = html;
@@ -868,642 +922,384 @@
 
     let html = "";
 
-    for (const work of ARCHIVE_WORKS.filter(w => w.top_pill !== false)) {
-      const isActive = normalizeKey(work.slug) === normalizeKey(CURRENT_WORK?.slug);
-      const entries = Array.isArray(work.entries) ? work.entries : [];
+    for (const work of STATE.works.filter(w => w.top_pill !== false)) {
+      const isActive = normalizeKey(work.slug) === normalizeKey(STATE.currentWork?.slug);
+      const entries = getVisibleEntries(work);
 
       html += `
         <div class="topworks-item${isActive ? " active" : ""}">
-          <button class="topworks-trigger" type="button">
-            <span>${escapeHtml(work.display || titleCaseSlug(work.slug))}</span>
-            <span class="topworks-caret"></span>
+          <button class="topworks-trigger" type="button" data-work-toggle="${escapeHtml(work.slug)}">
+            ${escapeHtml(work.display || titleCaseSlug(work.slug))}
           </button>
           <div class="topworks-flyout">
-            <div class="topworks-links">
       `;
 
       for (const entry of entries) {
-        const label = `${work.display || titleCaseSlug(work.slug)} · ${entry.subtitle || titleCaseSlug(entry.slug)}`;
-        const active = isActive && normalizeKey(entry.slug) === normalizeKey(CURRENT_ENTRY?.slug) ? " active" : "";
+        const current = isActive && isVisibleEntryCurrent(work, entry) ? " current" : "";
 
         html += `
-          <a href="?dir=${encodeURIComponent(work.slug)}&file=${encodeURIComponent(entry.slug)}" class="topworks-link${active}" data-dir="${escapeHtml(work.slug)}" data-file="${escapeHtml(entry.slug)}">${escapeHtml(label)}</a>
+          <button class="topworks-link${current}" type="button" data-dir="${escapeHtml(work.slug)}" data-file="${escapeHtml(entry.slug)}">
+            ${escapeHtml(getEntryDisplayLabel(work, entry))}
+          </button>
         `;
       }
 
-      html += `
-            </div>
-          </div>
-        </div>
-      `;
+      html += `</div></div>`;
     }
 
     nav.innerHTML = html;
-
-    nav.onclick = async (e) => {
-      const a = e.target.closest("a[data-dir][data-file]");
-      if (!a) return;
-      e.preventDefault();
-      burstServeAds();
-      await switchEntry(a.dataset.dir, a.dataset.file, false, { actionSource: "top-nav" });
-    };
   }
 
-  function wireTopFlyouts() {
-    if (topFlyoutsWired) return;
-    topFlyoutsWired = true;
+  function wireNavClicks() {
+    if (STATE.navWired) return;
+    STATE.navWired = true;
 
-    document.addEventListener("click", (e) => {
-      const trigger = e.target.closest(".topworks-trigger");
-      if (trigger) {
-        const item = trigger.closest(".topworks-item");
-        if (!item) return;
-
-        e.preventDefault();
-        const wasOpen = item.classList.contains("open");
-        $$(".topworks-item.open").forEach(x => x.classList.remove("open"));
-        if (!wasOpen) {
-          item.classList.add("open");
-          burstServeAds();
+    document.addEventListener("click", async (e) => {
+      const workToggle = e.target.closest("[data-work-toggle]");
+      if (workToggle) {
+        const slug = workToggle.dataset.workToggle;
+        if (STATE.isMobileReader) {
+          const willOpen = normalizeKey(slug) !== STATE.mobileOpenWorkSlug;
+          setMobileOpenWork(willOpen ? slug : "");
+          syncDialThumb();
         }
         return;
       }
 
-      if (!e.target.closest(".topworks-item")) {
-        $$(".topworks-item.open").forEach(x => x.classList.remove("open"));
-      }
+      const jump = e.target.closest("[data-dir][data-file]");
+      if (!jump) return;
+      await switchEntry(jump.dataset.dir, jump.dataset.file);
     });
   }
 
-  function wireMobileWorksNav() {
-    if (!IS_MOBILE_READER || mobileWorksWired) return;
-    mobileWorksWired = true;
+  function wireDial() {
+    if (!STATE.isMobileReader || STATE.dialWired) return;
+    STATE.dialWired = true;
 
-    const nav = document.getElementById("worksNav");
-    if (!nav) return;
+    const scrollEl = $("#worksNav");
+    const track = $("#dialTrack");
+    const thumb = $("#dialThumb");
+    if (!scrollEl || !track || !thumb) return;
 
-    nav.addEventListener("click", async (e) => {
-      const toggle = e.target.closest("[data-work-toggle]");
-      if (toggle) {
-        const slug = toggle.dataset.workToggle;
-        const normalized = normalizeKey(slug);
-        const isAlreadyOpen = normalized === normalizeKey(mobileOpenWorkSlug);
+    let dragging = false;
+    let startY = 0;
+    let startTop = 0;
 
-        setMobileOpenWork(isAlreadyOpen ? "" : slug);
-        syncDialThumb();
-        burstServeAds();
-        return;
-      }
+    const onMove = (clientY) => {
+      const thumbH = thumb.offsetHeight || 32;
+      const maxTop = Math.max(0, track.clientHeight - thumbH);
+      let nextTop = startTop + (clientY - startY);
+      nextTop = Math.max(0, Math.min(maxTop, nextTop));
+      thumb.style.top = `${nextTop}px`;
 
-      const chapterBtn = e.target.closest("button[data-dir][data-file]");
-      if (!chapterBtn) return;
+      const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      const ratio = maxTop > 0 ? nextTop / maxTop : 0;
+      scrollEl.scrollTop = ratio * maxScroll;
+    };
 
-      const dir = chapterBtn.dataset.dir;
-      const file = chapterBtn.dataset.file;
-
-      setMobileOpenWork(dir);
-      burstServeAds();
-      await switchEntry(dir, file, false, { actionSource: "mobile-nav" });
-      scrollToReaderTopInstant();
+    thumb.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      startY = e.clientY;
+      startTop = parseFloat(thumb.style.top || "0");
+      thumb.setPointerCapture(e.pointerId);
+      e.preventDefault();
     });
+
+    thumb.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      onMove(e.clientY);
+    });
+
+    thumb.addEventListener("pointerup", (e) => {
+      dragging = false;
+      thumb.releasePointerCapture?.(e.pointerId);
+    });
+
+    thumb.addEventListener("pointercancel", (e) => {
+      dragging = false;
+      thumb.releasePointerCapture?.(e.pointerId);
+    });
+
+    track.addEventListener("click", (e) => {
+      if (e.target === thumb) return;
+      const rect = track.getBoundingClientRect();
+      const thumbH = thumb.offsetHeight || 32;
+      const maxTop = Math.max(0, track.clientHeight - thumbH);
+      let nextTop = e.clientY - rect.top - thumbH / 2;
+      nextTop = Math.max(0, Math.min(maxTop, nextTop));
+      thumb.style.top = `${nextTop}px`;
+
+      const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+      const ratio = maxTop > 0 ? nextTop / maxTop : 0;
+      scrollEl.scrollTop = ratio * maxScroll;
+    });
+
+    scrollEl.addEventListener("scroll", syncDialThumb, { passive: true });
   }
 
-  function getEntryContext() {
-    const entries = Array.isArray(CURRENT_WORK?.entries) ? CURRENT_WORK.entries : [];
-    const currentIndex = entries.findIndex(entry => normalizeKey(entry.slug) === normalizeKey(CURRENT_ENTRY?.slug));
+  function getMappedImageList(entry) {
+    return Array.isArray(entry?.map_pages) ? entry.map_pages : [];
+  }
+
+  function getMappedManifest(selection) {
+    const pages = getMappedImageList(selection.entry);
+    if (!pages.length) return null;
 
     return {
-      entries,
-      currentIndex,
-      prev: currentIndex > 0 ? entries[currentIndex - 1] : null,
-      next: currentIndex >= 0 && currentIndex < entries.length - 1 ? entries[currentIndex + 1] : null
+      id: selection.entry.slug,
+      title: selection.work.display || titleCaseSlug(selection.work.slug),
+      subtitle: getEntryDisplayLabel(selection.work, selection.entry),
+      type: "chapter",
+      pages: pages.length,
+      images: pages.map((p) => p.url || p.r2_url || p.r2_path || ""),
+      ads: {
+        between_every: 0,
+        between_slots: 0,
+        final_block: 0
+      },
+      subids: {}
     };
   }
 
-  function getCurrentChapterPosition() {
-    const { currentIndex } = getEntryContext();
-    return currentIndex >= 0 ? currentIndex + 1 : 0;
+  function buildImageList(manifest) {
+    if (Array.isArray(manifest.images) && manifest.images.length) return manifest.images;
+    if (Array.isArray(manifest.files) && manifest.files.length) return manifest.files;
+    if (Array.isArray(manifest.pages) && manifest.pages.length) {
+      return manifest.pages.map(page => {
+        if (typeof page === "string") return page;
+        return page?.src || page?.file || page?.name || "";
+      }).filter(Boolean);
+    }
+    if (Number.isInteger(manifest.pages) && manifest.pages > 0) {
+      const pad = Number(manifest.padding) || 3;
+      const ext = String(manifest.extension || "jpg").replace(/^\./, "");
+      return Array.from({ length: manifest.pages }, (_, i) => `${String(i + 1).padStart(pad, "0")}.${ext}`);
+    }
+    return [];
   }
 
-  function makeTraversalPill(label, onClick, extraClass = "", disabled = false) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `traversal-pill${extraClass ? ` ${extraClass}` : ""}`;
-    btn.textContent = label;
-    btn.disabled = !!disabled;
-
-    if (!disabled && typeof onClick === "function") {
-      btn.addEventListener("click", onClick);
+  function validateManifest(manifest, itemUrl) {
+    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+      throw appError(ERROR.MANIFEST_INVALID, "item.json is not a valid object", { itemUrl });
     }
 
-    return btn;
-  }
-
-  function buildTraversal(position = "top") {
-    const shell = document.createElement("section");
-    shell.className = `traversal-shell ${position}`;
-    if (position === "bottom") shell.id = "bottomTraversal";
-
-    const kicker = document.createElement("p");
-    kicker.className = "traversal-kicker";
-    kicker.textContent = IS_MOBILE_READER
-      ? "Quick Chapter Jump"
-      : (position === "top" ? "Chapter Navigation" : "Keep The Scroll Alive");
-    shell.appendChild(kicker);
-
-    if (!IS_MOBILE_READER && position === "bottom") {
-      const prompt = document.createElement("div");
-      prompt.className = "continue-prompt";
-      const { next } = getEntryContext();
-      prompt.textContent = next
-        ? `Finished this chapter? Continue straight into ${next.subtitle || titleCaseSlug(next.slug)}.`
-        : "Finished this chapter? Pick your next move right here.";
-      shell.appendChild(prompt);
+    const images = buildImageList(manifest);
+    if (!images.length) {
+      throw appError(ERROR.MANIFEST_NO_IMAGES, "No images found in item.json", { itemUrl });
     }
 
-    const bar = document.createElement("div");
-    bar.className = "traversal-bar";
+    const hasAbsoluteImages = images.every(img => /^https?:\/\//i.test(String(img || "")));
+    const baseUrl = hasAbsoluteImages ? "" : normalizeBaseUrl(manifest.base_url);
 
-    const { entries, prev, next } = getEntryContext();
-
-    if (IS_MOBILE_READER) {
-      bar.appendChild(
-        makeTraversalPill(
-          "← Previous",
-          prev ? () => switchEntry(CURRENT_WORK.slug, prev.slug, false, { actionSource: "mobile-prev" }) : null,
-          "",
-          !prev
-        )
-      );
-
-      bar.appendChild(
-        makeTraversalPill("Search", () => {
-          burstServeAds();
-          scrollToSearchBar();
-        })
-      );
-
-      bar.appendChild(
-        makeTraversalPill(
-          next ? `Next: ${next.subtitle || titleCaseSlug(next.slug)}` : "Next →",
-          next ? () => switchEntry(CURRENT_WORK.slug, next.slug, false, { actionSource: "mobile-next" }) : null,
-          "",
-          !next
-        )
-      );
-
-      shell.appendChild(bar);
-      return shell;
+    if (!hasAbsoluteImages && !baseUrl) {
+      throw appError(ERROR.MANIFEST_NO_BASE_URL, "item.json missing base_url", { itemUrl });
     }
 
-    if (prev) {
-      bar.appendChild(makeTraversalPill("← Previous", () => switchEntry(CURRENT_WORK.slug, prev.slug, false, { actionSource: "prev" })));
-    }
-
-    for (const entry of entries) {
-      const isCurrent = normalizeKey(entry.slug) === normalizeKey(CURRENT_ENTRY?.slug);
-      const label = entry.subtitle || titleCaseSlug(entry.slug);
-      bar.appendChild(
-        makeTraversalPill(label, () => switchEntry(CURRENT_WORK.slug, entry.slug, false, { actionSource: "chapter-pill" }), isCurrent ? "current" : "")
-      );
-    }
-
-    if (next) {
-      bar.appendChild(makeTraversalPill(`Next: ${next.subtitle || titleCaseSlug(next.slug)}`, () => switchEntry(CURRENT_WORK.slug, next.slug, false, { actionSource: "next" })));
-    }
-
-    shell.appendChild(bar);
-    return shell;
-  }
-
-  function updateStickyBottomAction(progress = 0) {
-    const btn = document.getElementById("scrollToBottomTraversalBtn");
-    if (!btn) return;
-
-    const { next } = getEntryContext();
-
-    if (progress >= 0.9 && next) {
-      btn.textContent = `Continue: ${next.subtitle || titleCaseSlug(next.slug)}`;
-      btn.onclick = async () => {
-        burstServeAds();
-        await switchEntry(CURRENT_WORK.slug, next.slug, false, { actionSource: "sticky-next" });
-      };
-      return;
-    }
-
-    btn.textContent = "Last Page | Traversal Options";
-    btn.onclick = () => {
-      burstServeAds();
-      const target = document.getElementById("bottomTraversal") || document.getElementById("readerBottomAnchor");
-      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-    };
-  }
-
-  function showRetentionToast(message) {
-    if (IS_MOBILE_READER) return;
-
-    let toast = document.getElementById("readerRetentionToast");
-    if (!toast) {
-      toast = document.createElement("div");
-      toast.id = "readerRetentionToast";
-      toast.style.position = "fixed";
-      toast.style.top = "18px";
-      toast.style.right = "18px";
-      toast.style.zIndex = "7001";
-      toast.style.padding = "12px 14px";
-      toast.style.border = "1px solid rgba(255,255,255,.14)";
-      toast.style.borderRadius = "16px";
-      toast.style.background = "rgba(12,14,20,.88)";
-      toast.style.backdropFilter = "blur(14px)";
-      toast.style.boxShadow = "0 18px 50px rgba(0,0,0,.35)";
-      toast.style.color = "#f7f8fb";
-      toast.style.fontFamily = '"Handjet", system-ui, sans-serif';
-      toast.style.fontSize = "16px";
-      toast.style.opacity = "0";
-      toast.style.transform = "translateY(-8px)";
-      toast.style.transition = "opacity .18s ease, transform .18s ease";
-      document.body.appendChild(toast);
-    }
-
-    toast.textContent = message;
-    toast.style.opacity = "1";
-    toast.style.transform = "translateY(0)";
-
-    if (retentionToastTimer) clearTimeout(retentionToastTimer);
-    retentionToastTimer = window.setTimeout(() => {
-      toast.style.opacity = "0";
-      toast.style.transform = "translateY(-8px)";
-    }, 1200);
-  }
-
-  function updateChapterProgress(progress = 0) {
-    const clamped = Math.max(0, Math.min(1, progress));
-    const percent = Math.round(clamped * 100);
-
-    const pageBar = document.getElementById("pageProgressBar");
-    const fill = document.getElementById("chapterProgressFill");
-    const label = document.getElementById("chapterProgressLabel");
-    const text = document.getElementById("chapterProgressPercent");
-
-    if (pageBar) pageBar.style.width = `${percent}%`;
-    if (fill) fill.style.width = `${percent}%`;
-    if (text) text.textContent = `${percent}%`;
-    if (label) {
-      const chapterNo = getCurrentChapterPosition();
-      const baseLabel = CURRENT_ENTRY?.subtitle || CURRENT_ITEM?.subtitle || "Chapter Progress";
-      label.textContent = chapterNo ? `Chapter ${chapterNo} · ${baseLabel}` : baseLabel;
-    }
-
-    updateStickyBottomAction(clamped);
-
-    const bottomBtn = document.getElementById("scrollToBottomTraversalBtn");
-    if (bottomBtn && clamped >= BOTTOM_GLOW_PROGRESS && !bottomGlowTriggered) {
-      bottomGlowTriggered = true;
-      bottomBtn.classList.add("pulse");
-      burstServeAds();
-    }
-
-    if (bottomBtn && clamped < BOTTOM_GLOW_PROGRESS) {
-      bottomGlowTriggered = false;
-      bottomBtn.classList.remove("pulse");
-    }
-  }
-
-  function wireStickyControls() {
-    if (stickyControlsWired) return;
-    stickyControlsWired = true;
-
-    const topBtn = document.getElementById("scrollToSearchBtn");
-
-    if (topBtn) {
-      topBtn.addEventListener("click", () => {
-        burstServeAds();
-        scrollToSearchBar();
-      });
-    }
-
-    updateStickyBottomAction(0);
-  }
-
-  function clearRefreshTimers() {
-    if (railRefreshTimer) clearInterval(railRefreshTimer);
-    if (bannerRefreshTimer) clearInterval(bannerRefreshTimer);
-    if (betweenRefreshTimer) clearInterval(betweenRefreshTimer);
-    if (mobileStickyRefreshTimer) clearInterval(mobileStickyRefreshTimer);
-    railRefreshTimer = null;
-    bannerRefreshTimer = null;
-    betweenRefreshTimer = null;
-    mobileStickyRefreshTimer = null;
-  }
-
-  function refreshVisibleRailSlots() {
-    if (document.hidden || !CURRENT_ITEM || IS_MOBILE_READER) return false;
-
-    const subids = getSubids(CURRENT_ITEM);
-    let refreshed = false;
-
-    LEFT_RAIL_IDS.forEach((id, index) => {
-      const ok = refillSlotIfVisible(document.getElementById(id), ZONES.leftRail, subids.left, subids.work, index + 1);
-      refreshed = refreshed || ok;
-    });
-
-    RIGHT_RAIL_IDS.forEach((id, index) => {
-      const ok = refillSlotIfVisible(document.getElementById(id), ZONES.rightRail, subids.right, subids.work, index + 1);
-      refreshed = refreshed || ok;
-    });
-
-    if (refreshed) serveAds();
-    return refreshed;
-  }
-
-  function refreshVisibleTopBanner() {
-    if (document.hidden || !CURRENT_ITEM || IS_MOBILE_READER) return false;
-
-    const subids = getSubids(CURRENT_ITEM);
-    const el = document.getElementById("topBannerSlot");
-    const refreshed = refillSlotIfVisible(el, ZONES.topBanner, subids.top, subids.work, 1);
-
-    if (refreshed) serveAds();
-    return refreshed;
-  }
-
-  function refreshVisibleBetweenSlots() {
-    if (document.hidden || !CURRENT_ITEM) return false;
-
-    let refreshed = false;
-
-    $$(".between-slot").forEach((el) => {
-      const zoneId = Number(el.dataset.zoneId || 0);
-      const sub = Number(el.dataset.sub || 1);
-      const sub2 = Number(el.dataset.sub2 || 1);
-      const sub3 = Number(el.dataset.sub3 || 1);
-      if (!zoneId) return;
-
-      const ok = refillSlotIfVisible(el, zoneId, sub, sub2, sub3);
-      refreshed = refreshed || ok;
-    });
-
-    if (refreshed) serveAds();
-    return refreshed;
-  }
-
-  async function refreshMobileSticky() {
-    if (!IS_MOBILE_READER) return false;
-    const mount = document.getElementById("mobileStickyMount");
-    if (!mount || document.hidden) return false;
-    if (!canRefreshSlot(mount)) return false;
-
-    await loadMobileStickyBanner(true);
-    return true;
-  }
-
-  function startRefreshTimers() {
-    clearRefreshTimers();
-
-    if (!IS_MOBILE_READER) {
-      railRefreshTimer = window.setInterval(() => {
-        refreshVisibleRailSlots();
-      }, RAIL_REFRESH_MS);
-
-      bannerRefreshTimer = window.setInterval(() => {
-        refreshVisibleTopBanner();
-      }, BANNER_REFRESH_MS);
-
-      betweenRefreshTimer = window.setInterval(() => {
-        refreshVisibleBetweenSlots();
-      }, BETWEEN_REFRESH_MS);
-      return;
-    }
-
-    mobileStickyRefreshTimer = window.setInterval(() => {
-      refreshMobileSticky();
-    }, MOBILE_STICKY_REFRESH_MS);
-  }
-
-  function maybePreloadNextChapter() {
-    if (nextPrefetch || !CURRENT_WORK || !CURRENT_ENTRY) return;
-
-    const { next } = getEntryContext();
-    if (!next) return;
-
-    const itemUrl = getItemJsonUrl(CURRENT_WORK, next);
-
-    nextPrefetch = fetchJson(itemUrl)
-      .then(manifest => {
-        const images = buildImageList(manifest).slice(0, 3);
-        const base = normalizeBaseUrl(manifest.base_url);
-
-        images.forEach(name => {
-          const img = new Image();
-          img.decoding = "async";
-          img.src = `${base}/${name}`;
-        });
-
-        return manifest;
-      })
-      .catch(() => null);
-  }
-
-  function maybeServeVisibleReaderAds() {
-    let refreshed = false;
-    refreshed = refreshVisibleBetweenSlots() || refreshed;
-    refreshed = refreshVisibleRailSlots() || refreshed;
-    refreshed = refreshVisibleTopBanner() || refreshed;
-
-    if (!refreshed) {
-      const visibleBetween = $$(".between-slot").some(el => isElementInViewport(el));
-      if (visibleBetween) {
-        serveAds();
-      }
-    }
-  }
-
-  function wireProgressWatch() {
-    if (progressWatchWired) return;
-    progressWatchWired = true;
-
-    let ticking = false;
-
-    const onScroll = () => {
-      if (ticking) return;
-      ticking = true;
-
-      window.requestAnimationFrame(() => {
-        const scrollable = document.documentElement.scrollHeight - window.innerHeight;
-        const progress = scrollable > 0 ? window.scrollY / scrollable : 0;
-
-        updateChapterProgress(progress);
-
-        if (progress >= READ_PROGRESS_PREFETCH) {
-          maybePreloadNextChapter();
-        }
-
-        maybeServeVisibleReaderAds();
-        ticking = false;
-      });
-    };
-
-    window.addEventListener("scroll", onScroll, { passive: true });
+    return { manifest, baseUrl, images, hasAbsoluteImages };
   }
 
   function buildChapterMeta(manifest, imageCount) {
-    const meta = document.createElement("section");
-    meta.className = "chapter-meta";
-
-    const row = document.createElement("div");
-    row.className = "meta-row";
-
-    const chapterNo = getCurrentChapterPosition();
-    const leftTag = document.createElement("div");
-    leftTag.className = "chapter-tag";
-    leftTag.textContent = `${manifest.title || CURRENT_WORK.display || titleCaseSlug(CURRENT_WORK.slug)} · ${manifest.subtitle || CURRENT_ENTRY.subtitle || titleCaseSlug(CURRENT_ENTRY.slug)}${chapterNo ? ` · #${chapterNo}` : ""}`;
-
-    const rightTag = document.createElement("div");
-    rightTag.className = "chapter-tag";
-    rightTag.textContent = `${imageCount} page${imageCount === 1 ? "" : "s"}`;
-
-    row.appendChild(leftTag);
-    row.appendChild(rightTag);
-
-    const note = document.createElement("div");
-    note.className = "chapter-note";
-    note.textContent = IS_MOBILE_READER
-      ? "Use the chapter controls above or below the pages whenever you want to jump fast."
-      : "Keep reading. Use the bottom controls to roll straight into the next chapter without losing momentum.";
-
-    meta.appendChild(row);
-    meta.appendChild(note);
-
-    return meta;
+    const wrap = createEl("section", "chapter-meta");
+    const title = createEl("h2", "chapter-meta-title", manifest.subtitle || manifest.title || "Reader");
+    const sub = createEl("div", "chapter-meta-sub");
+    sub.textContent = `${imageCount} page${imageCount === 1 ? "" : "s"}`;
+    wrap.appendChild(title);
+    wrap.appendChild(sub);
+    return wrap;
   }
 
-  function clearDesktopAdShells() {
-    const topBanner = document.getElementById("topBannerSlot");
-    if (topBanner) topBanner.innerHTML = "";
+  function buildTraversal(position) {
+    const nav = createEl("nav", `chapter-traversal chapter-traversal--${position}`);
+    const prev = getEntryByOffset(STATE.currentWork, STATE.currentEntry, -1);
+    const next = getEntryByOffset(STATE.currentWork, STATE.currentEntry, 1);
 
-    [...LEFT_RAIL_IDS, ...RIGHT_RAIL_IDS].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.innerHTML = "";
+    const prevBtn = createEl("button", "chapter-traversal-btn");
+    prevBtn.type = "button";
+    prevBtn.textContent = prev ? `← ${getEntryDisplayLabel(STATE.currentWork, prev)}` : "← Previous";
+    prevBtn.disabled = !prev;
+    if (prev) {
+      prevBtn.dataset.dir = STATE.currentWork.slug;
+      prevBtn.dataset.file = prev.slug;
+    }
+
+    const cur = createEl("div", "chapter-traversal-current", getEntryDisplayLabel(STATE.currentWork, STATE.currentEntry));
+
+    const nextBtn = createEl("button", "chapter-traversal-btn");
+    nextBtn.type = "button";
+    nextBtn.textContent = next ? `${getEntryDisplayLabel(STATE.currentWork, next)} →` : "Next →";
+    nextBtn.disabled = !next;
+    if (next) {
+      nextBtn.dataset.dir = STATE.currentWork.slug;
+      nextBtn.dataset.file = next.slug;
+    }
+
+    nav.append(prevBtn, cur, nextBtn);
+    return nav;
+  }
+
+  function getImageAnnotationMap(work, entry) {
+    const map = getMap(work);
+    if (!map?.image_annotations?.length) return new Map();
+
+    const targetSlug = entry?.type === "mapped_chapter"
+      ? `${entry.volume_slug}__${entry.chapter_slug}`
+      : entry?.slug;
+
+    const lookup = new Map();
+    for (const anno of map.image_annotations) {
+      if (normalizeKey(anno.entry_slug || "") !== normalizeKey(targetSlug || "")) continue;
+      const page = Number(anno.page || 0);
+      if (!page) continue;
+      if (!lookup.has(page)) lookup.set(page, []);
+      lookup.get(page).push(anno);
+    }
+    return lookup;
+  }
+
+  function buildImageAnnotationBadge(pageNumber) {
+    const annotations = getImageAnnotationMap(STATE.currentWork, STATE.currentEntry).get(pageNumber) || [];
+    if (!annotations.length) return null;
+
+    const badge = createEl("button", "image-annotation-badge", `+${annotations.length}`);
+    badge.type = "button";
+    badge.title = annotations.map(a => a.label || a.summary || "Annotation").join(" · ");
+    badge.addEventListener("click", () => {
+      const message = annotations.map(a => a.label || a.summary || "Annotation").join("\n");
+      showToast(message);
     });
+    return badge;
   }
 
-  function shouldShowInterstitial(dir, file, options = {}) {
-    if (options.skipInterstitial) return false;
+  function updatePageProgressBar(percent) {
+    const bar = $("#readerProgressBar");
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  }
 
-    const selection = resolveSelection(dir, file);
-    if (!selection) return false;
+  function updateChapterProgress(pageNumber) {
+    const stat = $("#chapterProgress");
+    const total = buildImageList(STATE.currentManifest || {}).length || 0;
+    if (!stat || !total) return;
+    stat.textContent = `Page ${pageNumber}/${total}`;
+  }
 
-    const entries = Array.isArray(selection.work?.entries) ? selection.work.entries : [];
-    const targetIndex = entries.findIndex(entry => normalizeKey(entry.slug) === normalizeKey(file));
+  function scrollToPageIndex(page) {
+    const target = $(`.image-wrap[data-page="${page}"]`);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
-    // Skip first three chapters.
-    if (targetIndex < 3) return false;
+  function maybePrefetchNext() {
+    if (STATE.nextPrefetch) return;
 
-    const isDifferentChapter =
-      normalizeKey(dir) !== normalizeKey(CURRENT_WORK?.slug) ||
-      normalizeKey(file) !== normalizeKey(CURRENT_ENTRY?.slug);
+    const next = getEntryByOffset(STATE.currentWork, STATE.currentEntry, 1);
+    if (!next) return;
 
-    if (!isDifferentChapter) return false;
+    try {
+      if (next.type === "mapped_chapter" && Array.isArray(next.map_pages) && next.map_pages.length) {
+        const firstUrl = next.map_pages[0]?.url || next.map_pages[0]?.r2_url || "";
+        if (firstUrl) {
+          STATE.nextPrefetch = fetch(firstUrl, { cache: "force-cache" }).catch(() => null);
+        }
+        return;
+      }
 
-    return true;
+      const url = getItemJsonUrl(STATE.currentWork, next);
+      STATE.nextPrefetch = fetch(url, { cache: "force-cache" }).catch(() => null);
+    } catch {
+      // ignore
+    }
   }
 
   async function buildReader() {
-    const reader = document.getElementById("reader");
+    const reader = $("#reader");
     if (!reader) return;
 
-    nextPrefetch = null;
-    bottomGlowTriggered = false;
-    updateChapterProgress(0);
-
-    const state = getQueryState();
-    let resolved = resolveSelection(state.dir, state.file);
-
-    if (!resolved) {
-      const first = getFirstEntry();
-      resolved = first.work && first.entry ? first : null;
-      if (resolved) setQueryState(resolved.work.slug, resolved.entry.slug, true);
+    let selection = resolveSelectionFromQuery();
+    if (!selection) {
+      selection = resolveDefaultSelection();
     }
 
-    if (!resolved) {
-      throw new Error("No works found in library.json");
+    if (!selection) {
+      throw appError(ERROR.SELECTION_NOT_FOUND, "Could not resolve current work/entry");
     }
 
-    CURRENT_WORK = resolved.work;
-    CURRENT_ENTRY = resolved.entry;
+    STATE.currentWork = selection.work;
+    STATE.currentEntry = selection.entry;
+    STATE.nextPrefetch = null;
 
-    if (IS_MOBILE_READER) {
-      mobileOpenWorkSlug = resolved.work.slug;
+    let manifestRaw;
+    let itemUrl = "";
+
+    if (selection.entry.type === "mapped_chapter" && Array.isArray(selection.entry.map_pages)) {
+      manifestRaw = getMappedManifest(selection);
+    } else if (selection.entry.type === "mapped_volume") {
+      const firstChapter = getFirstChapterEntryForVolume(selection.work, selection.entry.volume_slug || selection.entry.slug);
+      if (!firstChapter) {
+        throw appError(ERROR.SELECTION_NOT_FOUND, "Mapped volume has no chapter target", {
+          work: selection.work.slug,
+          entry: selection.entry.slug
+        });
+      }
+
+      STATE.currentEntry = firstChapter;
+      setQueryState(selection.work.slug, firstChapter.slug, true);
+      manifestRaw = getMappedManifest({ work: selection.work, entry: firstChapter });
+    } else {
+      itemUrl = getItemJsonUrl(selection.work, selection.entry);
+
+      try {
+        manifestRaw = await fetchJson(itemUrl);
+      } catch (e) {
+        throw appError(ERROR.MANIFEST_FETCH_FAILED, "Failed to fetch item.json", {
+          itemUrl,
+          work: selection.work.slug,
+          entry: selection.entry.slug,
+          cause: e.message
+        });
+      }
     }
 
-    const itemUrl = getItemJsonUrl(resolved.work, resolved.entry);
-    const manifest = await fetchJson(itemUrl);
-    CURRENT_ITEM = manifest;
+    const { manifest, baseUrl, images, hasAbsoluteImages } = validateManifest(manifestRaw, itemUrl);
+    STATE.currentManifest = manifest;
 
-    const title = `${resolved.work.display || titleCaseSlug(resolved.work.slug)} · ${manifest.subtitle || resolved.entry.subtitle || titleCaseSlug(resolved.entry.slug)}`;
-    const workTitleEl = document.getElementById("workTitle");
-    if (workTitleEl) workTitleEl.textContent = title;
+    const workTitle = $("#workTitle");
+    if (workTitle) {
+      workTitle.textContent = `${selection.work.display || titleCaseSlug(selection.work.slug)} · ${getEntryDisplayLabel(selection.work, STATE.currentEntry)}`;
+    }
 
     renderWorksNav();
     syncSearchSeed();
 
-    const subids = getSubids(manifest);
-
-    if (!IS_MOBILE_READER) {
-      fillSlot(document.getElementById("topBannerSlot"), ZONES.topBanner, subids.top, subids.work, 1);
-      fillRailStacks(subids);
-      scheduleVideoSlider();
-      positionDesktopStickyAwayFromVideo();
-    } else {
-      clearDesktopAdShells();
-      await loadMobileStickyBanner();
-    }
+    buildTopBanner(manifest);
+    buildRails(manifest);
 
     reader.innerHTML = "";
-
-    const topAnchor = document.createElement("span");
-    topAnchor.id = "readerTopAnchor";
-    topAnchor.className = "reader-anchor";
-    reader.appendChild(topAnchor);
-
-    const images = buildImageList(manifest);
-    const base = normalizeBaseUrl(manifest.base_url);
-
-    if (!base) throw new Error(`Manifest for ${resolved.entry.slug} is missing base_url`);
-    if (!images.length) throw new Error(`Manifest for ${resolved.entry.slug} has no images`);
-
+    reader.appendChild(buildTraversal("top"));
     reader.appendChild(buildChapterMeta(manifest, images.length));
 
-    const note = document.createElement("div");
-    note.className = "note";
-    note.textContent = IS_MOBILE_READER
-      ? "Tap through chapters up top, then just sink into the scroll."
-      : "Stay in the flow. Bottom controls keep you moving into the next chapter fast.";
-    reader.appendChild(note);
-
-    reader.appendChild(buildTraversal("top"));
-
-    const betweenEvery = IS_MOBILE_READER ? 2 : (Number(manifest.ads?.between_every) || 0);
-    const betweenSlots = IS_MOBILE_READER ? 1 : (Number(manifest.ads?.between_slots) || 3);
-    const finalBlock = IS_MOBILE_READER ? 0 : Math.max(Number(manifest.ads?.final_block) || 0, BOTTOM_AD_COUNT);
+    const betweenEvery = Number(manifest?.ads?.between_every) || 0;
+    const betweenSlots = Number(manifest?.ads?.between_slots) || 3;
+    const finalBlock = Number(manifest?.ads?.final_block) || 0;
 
     let groupNumber = 0;
 
-    for (let i = 0; i < images.length; i++) {
-      reader.appendChild(
-        imageBlock(
-          `${base}/${images[i]}`,
-          `${manifest.title || resolved.work.display || resolved.work.slug} page ${i + 1}`
-        )
-      );
-
+    for (let i = 0; i < images.length; i += 1) {
       const pageNumber = i + 1;
-      const shouldInsertBetween =
-        betweenEvery > 0 &&
-        pageNumber % betweenEvery === 0 &&
-        pageNumber < images.length;
+      const wrap = createEl("article", "image-wrap");
+      wrap.dataset.page = String(pageNumber);
 
-      if (shouldInsertBetween) {
+      const img = new Image();
+      img.loading = i < 2 ? "eager" : "lazy";
+      img.decoding = "async";
+      img.src = hasAbsoluteImages ? String(images[i]) : `${baseUrl}/${images[i]}`;
+      img.alt = `${selection.work.display || selection.work.slug} · ${getEntryDisplayLabel(selection.work, STATE.currentEntry)} · Page ${pageNumber}`;
+      wrap.appendChild(img);
+
+      const badge = buildImageAnnotationBadge(pageNumber);
+      if (badge) wrap.appendChild(badge);
+
+      reader.appendChild(wrap);
+
+      if (betweenEvery > 0 && pageNumber % betweenEvery === 0 && pageNumber < images.length) {
         groupNumber += 1;
         reader.appendChild(betweenAd(manifest, groupNumber, betweenSlots));
       }
@@ -1515,130 +1311,158 @@
 
     reader.appendChild(buildTraversal("bottom"));
 
-    const recommend = buildRecommendationWidget();
-    if (recommend) {
-      reader.appendChild(recommend);
-      await ensureAdProviderScript(SPECIAL_ZONES.desktopRecommend.host);
-    }
-
-    const bottomAnchor = document.createElement("span");
-    bottomAnchor.id = "readerBottomAnchor";
-    bottomAnchor.className = "reader-anchor";
-    reader.appendChild(bottomAnchor);
-
-    setupAdVisibilityObserver();
-    serveAds(true);
-    startRefreshTimers();
+    updatePageProgressBar(0);
     updateChapterProgress(0);
 
-    window.setTimeout(() => serveAds(true), 900);
+    setTimeout(() => {
+      serveAdsSafe();
+    }, 100);
 
-    if (IS_MOBILE_READER) {
-      syncDialThumb();
-    }
+    maybePrefetchNext();
   }
 
-  async function switchEntry(dir, file, replace = false, options = {}) {
-    const { actionSource = "unknown" } = options;
-
-    if (shouldShowInterstitial(dir, file, options)) {
-      await fireChapterInterstitial();
-    }
-
-    setQueryState(dir, file, replace);
-
-    if (actionSource) {
-      burstServeAds();
-    }
-
-    await buildReader();
-
-    if (actionSource) {
-      window.setTimeout(() => burstServeAds(), 600);
-    }
-
-    scrollToReaderTopInstant();
-    showRetentionToast(`Now reading: ${CURRENT_ENTRY?.subtitle || titleCaseSlug(file)}`);
-  }
-
-  function wireDocumentVisibility() {
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) return;
-
-      serveAds(true);
-      window.setTimeout(() => {
-        refreshVisibleTopBanner();
-        refreshVisibleRailSlots();
-        refreshVisibleBetweenSlots();
-        refreshMobileSticky();
-      }, 400);
-    });
-  }
-
-  function wireReaderClickMonetization() {
-    document.addEventListener("click", (e) => {
-      const target = e.target;
-      if (!(target instanceof Element)) return;
-
-      const hotSelectors = [
-        ".image-wrap img",
-        ".topworks-link",
-        ".topworks-trigger",
-        ".search-result-pill",
-        ".traversal-pill",
-        ".mobile-work-trigger",
-        ".mobile-chapter-link",
-        "#scrollToSearchBtn",
-        "#scrollToBottomTraversalBtn"
-      ];
-
-      if (hotSelectors.some(sel => target.closest(sel))) {
-        burstServeAds();
+  async function switchEntry(dir, file, replace = false, meta = {}) {
+    try {
+      const selection = resolveSelection(dir, file);
+      if (!selection) {
+        throw appError(ERROR.SELECTION_NOT_FOUND, "Selection not found", { dir, file });
       }
-    }, { passive: true });
+
+      const finalEntry =
+        selection.entry.type === "mapped_volume"
+          ? (getFirstChapterEntryForVolume(selection.work, selection.entry.volume_slug || selection.entry.slug) || selection.entry)
+          : selection.entry;
+
+      setQueryState(selection.work.slug, finalEntry.slug, replace);
+      STATE.currentWork = selection.work;
+      STATE.currentEntry = finalEntry;
+
+      if (STATE.isMobileReader) {
+        setMobileOpenWork(selection.work.slug);
+      }
+
+      await buildReader();
+
+      if (!meta.keepScroll) {
+        window.scrollTo({ top: 0, behavior: "instant" });
+      }
+    } catch (e) {
+      throw appError(ERROR.SWITCH_ENTRY_FAILED, "Failed to switch entry", {
+        dir,
+        file,
+        cause: e.message
+      });
+    }
+  }
+
+  function wireProgress() {
+    if (STATE.progressWired) return;
+    STATE.progressWired = true;
+
+    const onScroll = () => {
+      const wraps = $$(".image-wrap");
+      if (!wraps.length) return;
+
+      const viewportH = window.innerHeight || document.documentElement.clientHeight || 1;
+      let activePage = 1;
+      let bestDelta = Infinity;
+
+      wraps.forEach((wrap, idx) => {
+        const rect = wrap.getBoundingClientRect();
+        const delta = Math.abs(rect.top - 80);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          activePage = idx + 1;
+        }
+      });
+
+      const total = wraps.length;
+      const percent = total > 1 ? ((activePage - 1) / (total - 1)) * 100 : 100;
+      updatePageProgressBar(percent);
+      updateChapterProgress(activePage);
+
+      const doc = document.documentElement;
+      const scrollTop = window.scrollY || doc.scrollTop || 0;
+      const scrollHeight = Math.max(doc.scrollHeight - viewportH, 1);
+      const nearBottom = scrollTop / scrollHeight >= CONFIG.prefetchThreshold;
+      if (nearBottom) maybePrefetchNext();
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    onScroll();
+  }
+
+  function wireStickyBits() {
+    if (STATE.stickyWired) return;
+    STATE.stickyWired = true;
+
+    const hero = $(".hero");
+    const body = document.body;
+    if (!hero || !body) return;
+
+    const onScroll = () => {
+      const rect = hero.getBoundingClientRect();
+      body.classList.toggle("hero-past", rect.bottom <= 24);
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    onScroll();
+  }
+
+  function showToast(message) {
+    let shell = $("#toastShell");
+    if (!shell) {
+      shell = createEl("div");
+      shell.id = "toastShell";
+      document.body.appendChild(shell);
+    }
+
+    const toast = createEl("div", "toast");
+    toast.textContent = message;
+    shell.appendChild(toast);
+
+    requestAnimationFrame(() => toast.classList.add("show"));
+    setTimeout(() => {
+      toast.classList.remove("show");
+      setTimeout(() => toast.remove(), 220);
+    }, CONFIG.toastMs);
+  }
+
+  function wireHistory() {
+    window.addEventListener("popstate", async () => {
+      try {
+        await buildReader();
+      } catch (e) {
+        showFatalError(e);
+      }
+    });
   }
 
   async function boot() {
-    await Promise.all([
-      ensureAdProviderScript("https://a.magsrv.com/ad-provider.js"),
-      ensureAdProviderScript("https://a.pemsrv.com/ad-provider.js")
-    ]);
+    try {
+      await loadLibrary();
+      await hydrateWorksFromBlocksIfNeeded();
+      await loadAllMaps();
+      buildSearchIndex();
 
-    await loadLibrary();
+      wireNavClicks();
+      wireSearch();
+      wireDial();
+      wireProgress();
+      wireStickyBits();
+      wireHistory();
 
-    wireTopFlyouts();
-    wireStickyControls();
-    wireProgressWatch();
-    wireSearch();
-    wireMobileWorksNav();
-    wireMobileDial();
-    wireDocumentVisibility();
-    wireReaderClickMonetization();
+      if (STATE.isMobileReader && !STATE.mobileOpenWorkSlug && STATE.works[0]) {
+        setMobileOpenWork(STATE.works[0].slug);
+      }
 
-    await buildReader();
-
-    window.addEventListener("popstate", async () => {
       await buildReader();
-      scrollToReaderTopInstant();
-    });
+    } catch (e) {
+      throw appError(ERROR.BOOT_FAILED, "Boot failed", { cause: e.message, inner: e.code || null });
+    }
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    boot().catch(err => {
-      console.error(err);
-      clearRefreshTimers();
-
-      const workTitleEl = document.getElementById("workTitle");
-      if (workTitleEl) workTitleEl.textContent = "Failed to load work";
-
-      const reader = document.getElementById("reader");
-      if (reader) {
-        reader.innerHTML = `
-          <div class="note">
-            Failed to load this work. Please check library.json, sources, item.json, base_url, and image filenames.
-          </div>
-        `;
-      }
-    });
-  });
+  boot().catch(showFatalError);
 })();
